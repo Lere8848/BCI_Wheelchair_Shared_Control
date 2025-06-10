@@ -1,0 +1,11 @@
+# Ignore build system
+build/
+install/
+log/
+
+# Ignore ROS-specific cache
+*.pyc
+*.swp
+.deps/
+.ccls-cache/
+.colcon/
