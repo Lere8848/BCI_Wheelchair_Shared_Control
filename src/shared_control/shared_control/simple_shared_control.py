@@ -7,7 +7,7 @@ import platform
 # 判断操作系统类型
 if platform.system() == 'Windows':
     import msvcrt
-else: # Linux
+else: # Linux or macOS
     import termios
     import tty
     import select
@@ -19,8 +19,6 @@ class SimpleSharedControl(Node):
         self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
         # 创建定时器，每0.1秒调用一次timer_callback
         self.timer = self.create_timer(0.1, self.timer_callback)
-        self.manual_control = False  # 是否为手动控制
-        self.last_cmd = Twist()      # 上一次的指令
         self.get_logger().info('SimpleSharedControl node initialized.')
 
     def get_key(self):
@@ -50,36 +48,28 @@ class SimpleSharedControl(Node):
         cmd = Twist()
 
         if key == 'w':
-            cmd.linear.x = 1.0      # 前进
-            self.manual_control = True
+            cmd.linear.x = 0.5    # 更快地前进
             self.get_logger().info('[DEBUG] Forward command issued.')
         elif key == 's':
-            cmd.linear.x = -1.0     # 后退
-            self.manual_control = True
+            cmd.linear.x = -0.3   # 后退
             self.get_logger().info('[DEBUG] Backward command issued.')
         elif key == 'a':
-            cmd.angular.z = 1.0     # 左转
-            self.manual_control = True
+            cmd.angular.z = -0.3  # 左转
             self.get_logger().info('[DEBUG] Turn left command issued.')
         elif key == 'd':
-            cmd.angular.z = -1.0    # 右转
-            self.manual_control = True
+            cmd.angular.z = 0.3   # 右转
             self.get_logger().info('[DEBUG] Turn right command issued.')
-        elif key == 'q':
-            self.get_logger().info('Exiting...')
-            rclpy.shutdown()
-            return
+        # elif key == 'q':
+        #     self.get_logger().info('Exiting...')
+        #     rclpy.shutdown()
+        #     return
         else:
-            if self.manual_control:
-                cmd = self.last_cmd  # 沿用上一次指令
-                self.get_logger().info('[DEBUG] Continuing last manual command.')
-            else:
-                cmd.linear.x = 0.3   # 自动前进
-                self.get_logger().info('[DEBUG] Automatic forward command issued.')
+            # 没有按键输入时，执行自动前进
+            cmd.linear.x = 0.3   # 自动前进
+            self.get_logger().info('[DEBUG] Automatic forward command issued.')
 
         self.get_logger().info(f'[DEBUG] Publishing cmd: linear.x={cmd.linear.x}, angular.z={cmd.angular.z}')
         self.pub.publish(cmd)        # 发布消息
-        self.last_cmd = cmd          # 保存本次指令
 
 def main(args=None):
     rclpy.init(args=args)
