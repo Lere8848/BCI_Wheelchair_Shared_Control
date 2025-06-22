@@ -1,13 +1,13 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
+from sensor_msgs.msg import LaserScan
 import sys
 import platform
 
-# 判断操作系统类型
 if platform.system() == 'Windows':
     import msvcrt
-else: # Linux or macOS
+else:
     import termios
     import tty
     import select
@@ -15,22 +15,24 @@ else: # Linux or macOS
 class SimpleSharedControl(Node):
     def __init__(self):
         super().__init__('simple_shared_control')
-        # 创建发布者，发布Twist消息到/cmd_vel话题
-        self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
-        # 创建定时器，每0.1秒调用一次timer_callback
-        self.timer = self.create_timer(0.1, self.timer_callback)
-        self.get_logger().info('SimpleSharedControl node initialized.')
 
+        self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
+        self.sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)
+
+        self.timer = self.create_timer(0.1, self.timer_callback)
+        self.latest_scan = None
+        self.get_logger().info('SimpleSharedControl node initialized with LIDAR safety check.')
+
+    # (TODO 后续可以放到 utils.py 中)
     def get_key(self):
-        # 获取键盘输入
-        if platform.system() == 'Windows':
+        if platform.system() == 'Windows': # Windows-specific key reading
             if msvcrt.kbhit():
                 key = msvcrt.getch().decode('utf-8')
                 print(f'[DEBUG] Key pressed: {key}')
                 return key
             else:
                 return ''
-        else:
+        else: # Unix-like systems
             settings = termios.tcgetattr(sys.stdin)
             tty.setraw(sys.stdin.fileno())
             rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
@@ -42,34 +44,53 @@ class SimpleSharedControl(Node):
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
             return key
 
+    def scan_callback(self, msg: LaserScan):
+        self.latest_scan = msg
+
+    def is_obstacle_too_close(self, threshold=1.0, center_angle_width_deg=20): # 1m thres
+        if self.latest_scan is None:
+            return False
+
+        angle_min = self.latest_scan.angle_min
+        angle_increment = self.latest_scan.angle_increment
+        center_index = len(self.latest_scan.ranges) // 2
+        half_span = int((center_angle_width_deg * 3.1416 / 180) / angle_increment)
+
+        start = max(0, center_index - half_span)
+        end = min(len(self.latest_scan.ranges), center_index + half_span)
+
+        for i in range(start, end):
+            if self.latest_scan.ranges[i] < threshold:
+                return True
+
+        return False
+
     def timer_callback(self):
-        # 定时器回调函数，处理键盘输入并发布消息
         key = self.get_key()
         cmd = Twist()
 
-        if key == 'w':
-            cmd.linear.x = 0.5    # 更快地前进
-            self.get_logger().info('[DEBUG] Forward command issued.')
+        too_close = self.is_obstacle_too_close()
+
+        if too_close:
+            self.get_logger().warn('[SAFETY] Obstacle too close! Forcing backward.')
+            cmd.linear.x = -0.3  # 强制后退
+        elif key == 'w':
+            cmd.linear.x = 0.5
         elif key == 's':
-            cmd.linear.x = -0.3   # 后退
-            self.get_logger().info('[DEBUG] Backward command issued.')
+            cmd.linear.x = -0.3
         elif key == 'a':
-            cmd.angular.z = -0.3  # 左转
-            self.get_logger().info('[DEBUG] Turn left command issued.')
+            cmd.angular.z = -0.3
         elif key == 'd':
-            cmd.angular.z = 0.3   # 右转
-            self.get_logger().info('[DEBUG] Turn right command issued.')
-        # elif key == 'q':
-        #     self.get_logger().info('Exiting...')
-        #     rclpy.shutdown()
-        #     return
+            cmd.angular.z = 0.3
+        elif key == 'q':
+            self.get_logger().info('Exiting...')
+            rclpy.shutdown()
+            return
         else:
-            # 没有按键输入时，执行自动前进
-            cmd.linear.x = 0.3   # 自动前进
-            self.get_logger().info('[DEBUG] Automatic forward command issued.')
+            cmd.linear.x = 0.3
 
         self.get_logger().info(f'[DEBUG] Publishing cmd: linear.x={cmd.linear.x}, angular.z={cmd.angular.z}')
-        self.pub.publish(cmd)        # 发布消息
+        self.pub.publish(cmd)
 
 def main(args=None):
     rclpy.init(args=args)
