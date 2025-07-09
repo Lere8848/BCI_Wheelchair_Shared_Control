@@ -18,6 +18,7 @@ class PathEvalNode(Node):
 
     def lidar_callback(self, msg):
         self.lidar_ranges = np.array(msg.ranges)
+        # self.get_logger().info(f'LIDAR data received: {len(self.lidar_ranges)} ranges')
 
     def timer_callback(self):
         if len(self.lidar_ranges) == 0:
@@ -35,18 +36,21 @@ class PathEvalNode(Node):
         #    path[1] = 0 
 
         def is_open(idx_range, threshold):
-            distances = self.lidar_ranges[idx_range]
-            distances = np.array(distances)
-            return np.any(distances > threshold) # 检测是否有足够的距离
+            distances = np.array(self.lidar_ranges[idx_range])
+            valid = distances[~np.isnan(distances)]
+            if len(valid) < 5:
+                return False
+            return np.percentile(distances, 40) > threshold # 30% percentile is a good indicator of openness
+            # 记得寻找文献证明这一点
 
         path = [
-            int(is_open(left_idx, 0.5)), # left
-            int(is_open(forward_idx, 0.5)), # forward
-            int(is_open(right_idx, 0.5)) # right
+            int(is_open(left_idx, 0.6)), # left
+            int(is_open(forward_idx, 0.6)), # forward
+            int(is_open(right_idx, 0.6)) # right
         ]
 
         all_dists = np.array(self.lidar_ranges)
-        danger = np.any(all_dists < 0.35)
+        danger = np.any(all_dists < 0.6) # 如果有任意距离小于0.6m，则认为有危险
 
         # path_options
         path_msg = Int8MultiArray()
