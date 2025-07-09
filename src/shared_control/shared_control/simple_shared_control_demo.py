@@ -14,7 +14,7 @@ else:
 
 class SimpleSharedControl(Node):
     def __init__(self):
-        super().__init__('simple_shared_control')
+        super().__init__('simple_shared_control_demo')
 
         self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.sub = self.create_subscription(LaserScan, '/scan', self.scan_callback, 10)

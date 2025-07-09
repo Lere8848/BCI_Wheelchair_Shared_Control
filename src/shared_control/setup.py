@@ -24,7 +24,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'simple_shared_control = shared_control.simple_shared_control:main', # entry point for the shared control node
+            'simple_shared_control_demo = shared_control.simple_shared_control_demo:main', # entry point for the shared control node
             'manual_control = shared_control.manual_control:main',  # entry point for the manual control node
             'ros_tcp_server = ros_tcp_endpoint.default_server_endpoint:main',  # entry point for the ros_tcp_endpoint server
         ],

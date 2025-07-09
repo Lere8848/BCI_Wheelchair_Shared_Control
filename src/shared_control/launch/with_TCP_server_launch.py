@@ -15,7 +15,7 @@ def generate_launch_description():
         # 启动 shared control node
         Node(
             package='shared_control',
-            executable='simple_shared_control',
+            executable='simple_shared_control_demo',
             name='shared_control_node',
             output='screen'
         ),
