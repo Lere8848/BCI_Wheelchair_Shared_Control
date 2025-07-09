@@ -17,11 +17,13 @@ class ManualControlNode(Node):
         self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.get_logger().info('ManualControlNode initialized.')
+        self.get_logger().info('Press "w", "s", "a", "d" to control the robot. Press "q" to quit.')
 
     def get_key(self):
         if platform.system() == 'Windows':
             if msvcrt.kbhit():
                 key = msvcrt.getch().decode('utf-8')
+                self.get_logger().debug(f'[DEBUG] Key pressed: {key}')
                 return key
             else:
                 return ''
@@ -31,6 +33,7 @@ class ManualControlNode(Node):
             rlist, _, _ = select.select([sys.stdin], [], [], 0.01)
             if rlist:
                 key = sys.stdin.read(1)
+                self.get_logger().debug(f'[DEBUG] Key pressed: {key}')
             else:
                 key = ''
             termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
@@ -41,17 +44,24 @@ class ManualControlNode(Node):
         cmd = Twist()
 
         if key == 'w':
-            cmd.linear.x = 1.0
+            cmd.linear.x = 0.5
+            self.get_logger().info('Moving forward')
         elif key == 's':
-            cmd.linear.x = -1.0
+            cmd.linear.x = -0.4
+            self.get_logger().info('Moving backward')
         elif key == 'a':
-            cmd.angular.z = 1.0
+            cmd.angular.z = -0.4
+            self.get_logger().info('Turning left')
         elif key == 'd':
-            cmd.angular.z = -1.0
+            cmd.angular.z = 0.5
+            self.get_logger().info('Turning right')
         else:
             cmd.linear.x = 0.0
             cmd.angular.z = 0.0
+            if key != '':
+                self.get_logger().info(f'Unknown key: {key}')
 
+        # self.get_logger().info(f'[DEBUG] Publishing cmd: linear.x={cmd.linear.x}, angular.z={cmd.angular.z}')
         self.pub.publish(cmd)
 
 def main(args=None):
