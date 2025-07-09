@@ -24,9 +24,12 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'simple_shared_control_demo = shared_control.simple_shared_control_demo:main', # entry point for the shared control node
-            'manual_control = shared_control.manual_control:main',  # entry point for the manual control node
             'ros_tcp_server = ros_tcp_endpoint.default_server_endpoint:main',  # entry point for the ros_tcp_endpoint server
+            'user_input_node = shared_control.user_input_node:main',  # entry point for the user input node
+            'path_eval_node = shared_control.path_eval_node:main',  # entry point for the path evaluation node
+            'manual = shared_control.manual_control:main',  # entry point for the manual control node
+            'demo = shared_control.simple_shared_control_demo:main', # entry point for the shared control node
+            'static = shared_control.static_shared_control_fusion_node:main',  # entry point for the fusion node
         ],
     },
 )
