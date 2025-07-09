@@ -17,7 +17,7 @@ class UserInputNode(Node):
         super().__init__('user_input_node')
         self.pub = self.create_publisher(Int8, '/user_cmd', 10)
         self.timer = self.create_timer(0.2, self.timer_callback)
-        self.get_logger().info('Press a/w/d for Left/Forward/Right, q to quit.')
+        self.get_logger().info('Press a/w/d for Left/Forward/Right')
 
     def get_key(self):
         if platform.system() == 'Windows':
@@ -49,9 +49,6 @@ class UserInputNode(Node):
             msg.data = 2  # right
             self.pub.publish(msg)
             self.get_logger().info('Intent: RIGHT')
-        elif key == 'q':
-            self.get_logger().info('Quitting...')
-            rclpy.shutdown()
 
 def main(args=None):
     rclpy.init(args=args)

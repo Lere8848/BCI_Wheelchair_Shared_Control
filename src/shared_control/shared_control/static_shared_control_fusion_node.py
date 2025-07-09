@@ -32,7 +32,7 @@ class FusionNode(Node):
             if direction == 0:  # left
                 twist.angular.z = -0.4
             elif direction == 1:  # forward
-                twist.linear.x = 0.3
+                twist.linear.x = 0.5
             elif direction == 2:  # right
                 twist.angular.z = 0.4
             self.get_logger().info(f'Executing user intent: {["LEFT","FORWARD","RIGHT"][direction]}')
