@@ -10,7 +10,7 @@ class PathEvalNode(Node):
         super().__init__('path_eval_node')
         self.pub = self.create_publisher(Int8MultiArray, '/path_options', 10)
         self.sub = self.create_subscription(LaserScan, '/scan', self.lidar_callback, 10)
-        # self.sub = self.create_subscription(Range, '/ultrasonic_front', self.lidar_callback, 10)
+        # self.front_ultrasonic = self.create_subscription(Range, '/ultrasonic_front', self.ultrasonic_callback, 10)
         self.danger_pub = self.create_publisher(Bool, '/danger_stop', 10)
         self.lidar_ranges = []
         self.timer = self.create_timer(1.0, self.timer_callback)
@@ -19,6 +19,9 @@ class PathEvalNode(Node):
     def lidar_callback(self, msg):
         self.lidar_ranges = np.array(msg.ranges)
         # self.get_logger().info(f'LIDAR data received: {len(self.lidar_ranges)} ranges')
+    
+    # def ultrasonic_callback(self, msg):
+    #     self.front_ultrasonic = msg.range
 
     def timer_callback(self):
         if len(self.lidar_ranges) == 0:

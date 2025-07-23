@@ -30,5 +30,12 @@ def generate_launch_description():
             package='shared_control',
             executable='path_eval_node',
             name='path_eval_node'
+        ),
+
+        # No input monitor node
+        Node(
+            package='shared_control',
+            executable='no_input_monitor',
+            name='no_input_monitor_node'
         )
     ])
