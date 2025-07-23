@@ -31,6 +31,7 @@ setup(
             'demo = shared_control.simple_shared_control_demo:main', # entry point for the shared control node
             'static = shared_control.static_shared_control_fusion_node:main',  # entry point for the fusion node
             'no_input_monitor = shared_control.no_input_monitor_node:main',  # entry point for the no input monitor node
+            'potential_field_planner = shared_control.potential_field_planner:main',  # entry point for the potential field planner node
         ],
     },
 )
