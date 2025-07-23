@@ -30,6 +30,7 @@ setup(
             'manual = shared_control.manual_control:main',  # entry point for the manual control node
             'demo = shared_control.simple_shared_control_demo:main', # entry point for the shared control node
             'static = shared_control.static_shared_control_fusion_node:main',  # entry point for the fusion node
+            'no_input_monitor = shared_control.no_input_monitor_node:main',  # entry point for the no input monitor node
         ],
     },
 )
