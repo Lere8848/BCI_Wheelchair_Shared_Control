@@ -91,11 +91,11 @@ class FusionNode(Node):
         if self.path_options[direction] == 1:
             # Direction is safe, generate movement
             if direction == 0:  # left
-                twist.angular.z = -0.3
+                twist.angular.z = -0.2
             elif direction == 1:  # forward
                 twist.linear.x = 0.5
             elif direction == 2:  # right
-                twist.angular.z = 0.3
+                twist.angular.z = 0.2
             
             self.cmd_pub.publish(twist)
             self.get_logger().info(f'execute user intent: {["left", "forward", "right"][direction]}')
