@@ -245,8 +245,8 @@ class PathEvalNode(Node):
         
         # 检查是否有明显的左右边界
         # 如果存在通道，应该能在左右两侧检测到障碍物聚集
-        left_boundary_points = np.sum(lateral_positions < -0.5)  # 左侧边界
-        right_boundary_points = np.sum(lateral_positions > 0.5)   # 右侧边界
+        left_boundary_points = np.sum(lateral_positions > 0.5)   # 左侧边界（正Y方向）
+        right_boundary_points = np.sum(lateral_positions < -0.5)  # 右侧边界（负Y方向）
         
         # 检查距离的梯度变化
         if len(distances) > 3:
