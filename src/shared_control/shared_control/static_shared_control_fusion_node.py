@@ -14,7 +14,7 @@ class FusionNode(Node):
         self.user_cmd_sub = self.create_subscription(Int8, '/user_cmd', self.user_cmd_callback, 10)
         self.path_opt_sub = self.create_subscription(Int8MultiArray, '/path_options', self.path_callback, 10)
         
-        # 订阅自动规划的路径指令
+        # 订阅势场算法的路径指令（按需生成）
         self.auto_cmd_sub = self.create_subscription(Twist, '/auto_cmd_vel', self.auto_cmd_callback, 10)
         
         # 订阅多路径检测信号
@@ -31,24 +31,23 @@ class FusionNode(Node):
         self.danger = False
         self.create_subscription(Bool, '/danger_stop', self.danger_callback, 10)
 
-        self.path_options = [1, 1, 1]  # default all passable
-        self.path_blocked = False      # 前方路径是否被阻塞
-        self.auto_cmd = Twist()        # 存储自动规划的命令
+        self.path_options = [1, 1, 1]  # 路径可行性 [左, 前, 右]
+        self.path_blocked = False      # 整体路径是否被阻塞
+        self.auto_cmd = Twist()        # 势场算法生成的运动命令
         
         # 多路径检测状态
         self.multipath_detected = False
-        self.multipath_status = [False, False, False]
+        self.multipath_status = [False, False, False]  # [左, 前, 右] 哪些方向有路径
         
-        # 控制模式状态机
-        self.control_mode = "USER_INPUT"  # USER_INPUT, POTENTIAL_FIELD, WAITING
-        self.auto_mode = True          # 默认启用自动模式
+        # 控制状态：默认静止，等待用户触发
+        self.state = "IDLE"  # IDLE, EXECUTING, WAITING_FOR_USER
+        self.execution_start_time = None
+        self.execution_duration = 3.0  # 每次执行持续时间(秒)
         
-        # 势场运行相关参数
-        self.potential_field_start_time = None  # 势场模式开始时间
-        self.potential_field_duration = 3.0    # 势场运行持续时间(秒)
+        # 用户意图状态
+        self.pending_user_direction = None  # 待执行的用户方向意图
+        self.last_user_command_time = None
         
-        self.cmd_active = False        # 用户命令是否激活
-        self.last_cmd_time = None
         self.timer = self.create_timer(0.1, self.timer_callback)
 
     def path_callback(self, msg):
@@ -61,129 +60,115 @@ class FusionNode(Node):
             self.multipath_status = [bool(x) for x in msg.data]
             self.multipath_detected = sum(self.multipath_status) >= 2
             
-            if self.multipath_detected and self.control_mode == "POTENTIAL_FIELD":
-                # 在势场模式下检测到多路径，立刻停止并切换到用户输入模式
-                self.get_logger().warn('Multiple paths detected! Switching to user input mode.')
-                self.control_mode = "USER_INPUT"
-                self.cmd_active = False
-                self.auto_mode = False
-                # 立即停止
-                stop_cmd = Twist()
-                self.cmd_pub.publish(stop_cmd)
+            if self.multipath_detected:
+                self.get_logger().info(f'Multiple paths detected: Left={self.multipath_status[0]}, Front={self.multipath_status[1]}, Right={self.multipath_status[2]}')
+                # 在多路径情况下，如果没有待执行的用户指令，提示等待
+                if self.pending_user_direction is None and self.state == "IDLE":
+                    self.get_logger().warn('Multiple paths available, waiting for user direction input...')
 
     def danger_callback(self, msg):
-        """危险检测回调 - 只在极端情况下触发，不阻挡势场前进"""
+        """危险检测回调 - 立即停止"""
         self.danger = msg.data
         if self.danger:
-            if self.control_mode == "POTENTIAL_FIELD":
-                # 在势场模式下触发危险停止，切换回用户输入模式
-                self.get_logger().warn('Danger detected! Stopping potential field navigation, waiting for user to re-enter intent.')
-                self.control_mode = "USER_INPUT"
-                self.cmd_active = False
-                self.auto_mode = False
-            else:
-                # 在其他模式下的危险处理
-                self.get_logger().warn('Danger stop triggered! Emergency braking!')
-                self.cmd_active = False
-                self.auto_mode = False
-            
+            self.get_logger().warn('Danger detected! Emergency stop!')
             # 立即停止轮椅
             stop_cmd = Twist()
             self.cmd_pub.publish(stop_cmd)
     
     def auto_cmd_callback(self, msg):
-        # 保存自动规划的命令，供后续使用
+        """接收势场算法生成的运动命令"""
         self.auto_cmd = msg
         
     def path_blocked_callback(self, msg):
-        # 更新路径阻塞状态
+        """更新路径阻塞状态"""
         self.path_blocked = msg.data
 
     def timer_callback(self):
-        """主控制循环 - 实现状态机逻辑"""
+        """主控制循环 - 用户触发的势场执行"""
         current_time = self.get_clock().now()
         
+        # 检查危险状态
+        if self.danger:
+            # 危险状态下立即停止并回到空闲状态
+            self.state = "IDLE"
+            self.pending_user_direction = None
+            stop_cmd = Twist()
+            self.cmd_pub.publish(stop_cmd)
+            return
+        
         # 状态机逻辑
-        if self.control_mode == "USER_INPUT":
-            # 用户输入模式：等待用户命令或执行用户命令
-            if self.cmd_active and not self.danger:
-                # 检查用户命令是否过期
-                elapsed = current_time - self.last_cmd_time
-                if elapsed > Duration(seconds=1.5):  # 用户意图持续1.5秒
-                    self.get_logger().info('User intent expired, switching to potential field mode')
-                    self.control_mode = "POTENTIAL_FIELD"
-                    self.potential_field_start_time = current_time
-                    self.cmd_active = False
-                    self.auto_mode = True
-            
-        elif self.control_mode == "POTENTIAL_FIELD":
-            # 势场模式：运行3秒或直到满足退出条件
-            if not self.danger and self.auto_mode:
-                # 检查是否运行满3秒
-                if self.potential_field_start_time is not None:
-                    elapsed = current_time - self.potential_field_start_time
-                    if elapsed > Duration(seconds=self.potential_field_duration):
-                        # 3秒时间到，切换回用户输入模式
-                        self.get_logger().info('Potential field mode 3 seconds completed, switching back to user input mode')
-                        self.control_mode = "USER_INPUT"
-                        self.auto_mode = False
-                        # 停止运动，等待用户输入
-                        stop_cmd = Twist()
-                        self.cmd_pub.publish(stop_cmd)
-                        return
+        if self.state == "IDLE":
+            # 空闲状态：轮椅静止，等待用户触发
+            if self.pending_user_direction is not None:
+                # 有待执行的用户意图，检查是否可以执行
+                direction = self.pending_user_direction
                 
-                # 发布自动规划的命令
-                if not (self.auto_cmd.linear.x == 0.0 and self.auto_cmd.angular.z == 0.0):
-                    self.get_logger().debug(f'Potential field navigation: linear.x={self.auto_cmd.linear.x:.2f}, angular.z={self.auto_cmd.angular.z:.2f}')
-                    self.cmd_pub.publish(self.auto_cmd)
+                # 检查用户选择的方向是否可行
+                if self.path_options[direction] == 1:
+                    self.get_logger().info(f'Starting execution for user direction: {["Left", "Forward", "Right"][direction]}')
+                    self.state = "EXECUTING"
+                    self.execution_start_time = current_time
+                    # 清除待执行意图
+                    self.pending_user_direction = None
                 else:
-                    # 如果势场算法输出为零，可能到达目标或遇到问题，切换回用户模式
-                    self.get_logger().info('Potential field output is zero, switching back to user input mode')
-                    self.control_mode = "USER_INPUT"
-                    self.auto_mode = False
-
+                    # 用户选择的方向被阻塞
+                    self.get_logger().warn(f'User selected direction {["Left", "Forward", "Right"][direction]} is blocked, staying idle')
+                    self.pending_user_direction = None
+                    stop_cmd = Twist()
+                    self.cmd_pub.publish(stop_cmd)
+            else:
+                # 没有待执行意图，保持静止
+                stop_cmd = Twist()
+                self.cmd_pub.publish(stop_cmd)
+        
+        elif self.state == "EXECUTING":
+            # 执行状态：按照势场算法执行用户选择的方向
+            if self.execution_start_time is not None:
+                elapsed = current_time - self.execution_start_time
+                
+                if elapsed > Duration(seconds=self.execution_duration):
+                    # 执行时间到达，回到空闲状态
+                    self.get_logger().info('Execution completed, returning to idle state')
+                    self.state = "IDLE"
+                    self.execution_start_time = None
+                    stop_cmd = Twist()
+                    self.cmd_pub.publish(stop_cmd)
+                    return
+            
+            # 继续执行势场算法的输出
+            if not (self.auto_cmd.linear.x == 0.0 and self.auto_cmd.angular.z == 0.0):
+                self.get_logger().debug(f'Executing potential field command: linear={self.auto_cmd.linear.x:.2f}, angular={self.auto_cmd.angular.z:.2f}')
+                self.cmd_pub.publish(self.auto_cmd)
+            else:
+                # 势场算法输出为零，可能到达目标或遇到障碍，提前结束执行
+                self.get_logger().info('Potential field output is zero, ending execution early')
+                self.state = "IDLE"
+                self.execution_start_time = None
+                stop_cmd = Twist()
+                self.cmd_pub.publish(stop_cmd)
+    
     def user_cmd_callback(self, msg):
-        """用户命令回调 - 在用户输入模式下执行用户意图"""
+        """用户命令回调 - 触发势场算法执行用户选择的方向"""
         direction = msg.data  # 0=left, 1=forward, 2=right
 
         if direction < 0 or direction > 2:
             self.get_logger().warn(f'Invalid direction: {direction}')
             return
 
-        # 只在用户输入模式下处理用户命令
-        if self.control_mode != "USER_INPUT":
-            self.get_logger().debug(f'Current mode is {self.control_mode}, ignoring user input')
-            return
-
-        twist = Twist()
-
-        # 强制切换到用户输入模式
-        self.control_mode = "USER_INPUT"
-        self.auto_mode = False
-
-        if self.path_options[direction] == 1:
-            # 方向安全，生成运动命令
-            if direction == 0:  # left - 缓慢前进并左转
-                twist.linear.x = 0.34   # 缓慢前进分量
-                twist.angular.z = -0.15  # 左转分量
-            elif direction == 1:  # forward - 正常前进
-                twist.linear.x = 0.5   # 正常前进速度
-                twist.angular.z = 0.0  # 无转向
-            elif direction == 2:  # right - 缓慢前进并右转
-                twist.linear.x = 0.34   # 缓慢前进分量
-                twist.angular.z = 0.15  # 右转分量
+        direction_names = ["Left", "Forward", "Right"]
+        self.get_logger().info(f'User command received: {direction_names[direction]}')
+        
+        # 设置待执行的用户意图
+        self.pending_user_direction = direction
+        self.last_user_command_time = self.get_clock().now()
+        
+        # 如果当前正在执行，终止当前执行并准备新的执行
+        if self.state == "EXECUTING":
+            self.get_logger().info('Interrupting current execution for new user command')
+            self.state = "IDLE"
+            self.execution_start_time = None
             
-            self.cmd_pub.publish(twist)
-            self.get_logger().info(f'Executing user intent: {["Left", "Forward", "Right"][direction]}')
-
-            # 设置命令激活并记录时间
-            self.cmd_active = True
-            self.last_cmd_time = self.get_clock().now()
-
-        else:
-            # 不安全的方向，停止
-            self.get_logger().warn(f'Blocked direction: {["Left", "Forward", "Right"][direction]} - Stopping movement')
-            self.cmd_pub.publish(Twist())
+        # 状态将在下一个timer_callback中处理新的用户意图
 
 
 def main(args=None):

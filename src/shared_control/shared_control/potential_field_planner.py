@@ -35,9 +35,9 @@ class PotentialFieldPlanner(Node):
         
         # 三大扇区配置 (左60°, 前60°, 右60°)
         self.major_sectors = {
-            0: (math.pi/6, math.pi/2),      # 左扇区：30°到90°
+            0: (-math.pi/2, -math.pi/6),    # 左扇区：-90°到-30° (调整后)
             1: (-math.pi/6, math.pi/6),     # 前扇区：-30°到30°
-            2: (-math.pi/2, -math.pi/6)     # 右扇区：-90°到-30°
+            2: (math.pi/6, math.pi/2)       # 右扇区：30°到90° (调整后)
         }
         
         # 每个大扇区内的小扇区数量
@@ -57,7 +57,7 @@ class PotentialFieldPlanner(Node):
         self.timer = self.create_timer(0.1, self.calculate_path)
         # 激光数据存储
         self.laser_data = None
-        self.get_logger().info('Potential Field Planner Node Initialized (Focuses on Force Calculation)')
+        self.get_logger().info('Potential Field Planner Node Initialized')
 
     def user_dir_callback(self, msg):
         """接收用户意图并记录历史"""
@@ -246,7 +246,7 @@ class PotentialFieldPlanner(Node):
             # 吸引子位置被障碍物阻挡，需要调整
             # 将吸引子拉近到安全距离
             safe_distance = min(measured_distance * 0.8, attractor_distance)
-            if safe_distance > 1.0:  # 至少保持1米距离
+            if safe_distance > 0.5:  # 至少保持0.5米距离
                 attractor_pos['distance'] = safe_distance
                 attractor_pos['x'] = safe_distance * math.cos(attractor_angle)
                 attractor_pos['y'] = safe_distance * math.sin(attractor_angle)
@@ -391,14 +391,6 @@ class PotentialFieldPlanner(Node):
         intent_msg = String()
         intent_msg.data = wheelchair_intent
         self.wheelchair_intent_pub.publish(intent_msg)
-        
-        # 11. 详细日志
-        self.get_logger().debug(f'Attractor position: ({attractor_pos["x"]:.2f}, {attractor_pos["y"]:.2f})')
-        self.get_logger().debug(f'Attractive force: ({att_force_x:.2f}, {att_force_y:.2f})')
-        self.get_logger().debug(f'Repulsive force: ({rep_force_x:.2f}, {rep_force_y:.2f})')
-        self.get_logger().debug(f'Total force: ({total_force_x:.2f}, {total_force_y:.2f})')
-        self.get_logger().debug(f'Command: linear.x={cmd.linear.x:.2f}, angular.z={cmd.angular.z:.2f}')
-        self.get_logger().info(wheelchair_intent)
 
 def main(args=None):
     rclpy.init(args=args)
