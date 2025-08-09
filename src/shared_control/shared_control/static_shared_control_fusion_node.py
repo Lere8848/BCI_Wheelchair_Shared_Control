@@ -89,14 +89,17 @@ class FusionNode(Node):
         self.auto_mode = False
 
         if self.path_options[direction] == 1:
-            # Direction is safe, generate movement
-            if direction == 0:  # left
-                twist.angular.z = -0.2
-            elif direction == 1:  # forward
-                twist.linear.x = 0.5
-            elif direction == 2:  # right
-                twist.angular.z = 0.2
-            
+            # Direction is safe, generate movement - 确保前进+转向组合运动
+            if direction == 0:  # left - 缓慢前进并左转
+                twist.linear.x = 0.34   # 缓慢前进分量
+                twist.angular.z = -0.15  # 左转分量
+            elif direction == 1:  # forward - 正常前进
+                twist.linear.x = 0.5   # 正常前进速度
+                twist.angular.z = 0.0  # 无转向
+            elif direction == 2:  # right - 缓慢前进并右转
+                twist.linear.x = 0.34   # 缓慢前进分量
+                twist.angular.z = 0.15  # 右转分量
+
             self.cmd_pub.publish(twist)
             self.get_logger().info(f'execute user intent: {["left", "forward", "right"][direction]}')
 

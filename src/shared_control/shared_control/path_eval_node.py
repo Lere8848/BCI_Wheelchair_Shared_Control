@@ -305,31 +305,13 @@ class PathEvalNode(Node):
         angle_min = self.laser_data.angle_min
         angle_increment = self.laser_data.angle_increment
 
-        # === 原有的简单路径判断逻辑 ===
-        # lidar ranges 分为左、中、右三部分
-        # 假设 lidar_ranges 长度为 360，左 120，前 120，右 120
-        total_rays = len(self.lidar_ranges)
-        left_idx = range(0, total_rays // 3)
-        forward_idx = range(total_rays // 3, 2 * total_rays // 3)
-        right_idx = range(2 * total_rays // 3, total_rays)
-
-        def is_open(idx_range, threshold):
-            distances = np.array(self.lidar_ranges[idx_range])
-            valid = distances[~np.isnan(distances)]
-            if len(valid) < 5:
-                return False
-            return np.percentile(distances, 40) > threshold # 30% percentile is a good indicator of openness
-
-        path = [
-            int(is_open(left_idx, 0.6)), # left
-            int(is_open(forward_idx, 0.6)), # forward
-            int(is_open(right_idx, 0.6)) # right
-        ]
-
-        # === 新增的高级路径分析 ===
-        # 使用向量方法检测多路径情况
+        # === 使用统一的高级向量方法进行路径分析 ===
+        # 使用向量方法检测多路径情况（这将成为主要的路径评估方法）
         paths_status = self.detect_multiple_paths_vector(ranges, angle_min, angle_increment)
         open_paths_count = sum(paths_status)
+        
+        # 将向量分析结果作为path_options使用，确保一致性
+        path = [int(p) for p in paths_status]  # [左, 前, 右] 与向量分析结果一致
         
         # 检查前方障碍物（用于滑动窗口验证）
         immediate_front_blocked = False
@@ -357,7 +339,7 @@ class PathEvalNode(Node):
             multipath_detected = True
             self.get_logger().info(f'Multiple paths detected! Open paths: Left={paths_status[0]}, Front={paths_status[1]}, Right={paths_status[2]}')
         
-        # 综合判断是否需要阻塞路径
+        # 综合判断是否需要阻塞路径 - 基于向量分析结果
         path_blocked = False
         block_reason = ""
         
@@ -370,24 +352,36 @@ class PathEvalNode(Node):
         elif multipath_detected:
             path_blocked = True
             block_reason = "Multiple paths detected - awaiting user selection"
-        # 注释掉一般的前方阻塞判断，让势场算法处理
-        # elif front_blocked:
-        #     path_blocked = True
-        #     block_reason = "Front path blocked"
+        elif not paths_status[1]:  # 如果向量分析显示前方不通畅
+            path_blocked = True
+            block_reason = "Front path blocked by vector analysis"
 
-        # 危险检测
+        # 危险检测 - 降低敏感度，避免过度干扰
         all_dists = np.array(self.lidar_ranges)
-        danger = np.any(all_dists < 0.6) # 如果有任意距离小于0.6m，则认为有危险
+        # 改为更严格的条件：0.4m距离且需要在前方较小角度范围内
+        danger = False
+        
+        for i, dist in enumerate(all_dists):
+            if not math.isfinite(dist):
+                continue
+            # 计算角度（简化计算，假设360度扫描）
+            angle = (i / len(all_dists)) * 2 * math.pi - math.pi
+            
+            # 只有在前方较小范围内（±20度）且距离非常近（0.4m）才触发危险
+            if abs(angle) < math.pi/9 and dist < 0.4:  # ±20度，0.4米
+                danger = True
+                self.get_logger().warn(f'Danger detected: obstacle at {dist:.2f}m in front')
+                break
 
         # === 发布所有消息 ===
-        # 发布原有的path_options
+        # 发布统一的path_options（基于向量分析）
         path_msg = Int8MultiArray()
         path_msg.data = path
         self.pub.publish(path_msg)
 
-        # 发布多路径检测结果
+        # 发布向量分析结果作为多路径检测（与path_options现在是相同的）
         multipath_msg = Int8MultiArray()
-        multipath_msg.data = [int(p) for p in paths_status]  # 转换为int列表
+        multipath_msg.data = path  # 现在与path_options一致
         self.multipath_pub.publish(multipath_msg)
 
         # 发布路径阻塞状态
@@ -397,11 +391,11 @@ class PathEvalNode(Node):
 
         # 发布危险状态
         danger_msg = Bool()
-        danger_msg.data = bool(danger) # numpy的bool和ros2 msg bool 不兼容 需要转换
+        danger_msg.data = bool(danger)
         self.danger_pub.publish(danger_msg)
 
         # 日志输出
-        self.get_logger().info(f'/path_options: {path} | /multipath: {paths_status} | /path_blocked: {path_blocked} ({block_reason}) | /danger_stop: {danger}')
+        self.get_logger().info(f'/path_options: {path} | /multipath: {path} | /path_blocked: {path_blocked} ({block_reason}) | /danger_stop: {danger}')
         
         if path_blocked:
             self.get_logger().debug(f'Path analysis details:')

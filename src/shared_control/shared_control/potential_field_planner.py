@@ -20,7 +20,7 @@ class PotentialFieldPlanner(Node):
         # 订阅用户意图（0=左, 1=前, 2=右）
         self.user_dir_sub = self.create_subscription(
             Int8,
-            '/user_direction',
+            '/user_cmd',
             self.user_dir_callback,
             10
         )
