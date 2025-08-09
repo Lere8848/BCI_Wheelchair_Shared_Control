@@ -6,70 +6,49 @@ from geometry_msgs.msg import Twist, Point
 from std_msgs.msg import Bool, Int8, Int8MultiArray, String
 import numpy as np
 import math
+import rclpy.duration
 
 class PotentialFieldPlanner(Node):
     def __init__(self):
         super().__init__('potential_field_planner')
         # 订阅激光雷达数据
-        self.laser_sub = self.create_subscription(
-            LaserScan, 
-            '/scan',
-            self.laser_callback, 
-            10
-        )
+        self.laser_sub = self.create_subscription(LaserScan, '/scan', self.laser_callback, 10)
         # 订阅用户意图（0=左, 1=前, 2=右）
-        self.user_dir_sub = self.create_subscription(
-            Int8,
-            '/user_cmd',
-            self.user_dir_callback,
-            10
-        )
-        
+        self.user_dir_sub = self.create_subscription(Int8, '/user_cmd', self.user_dir_callback, 10)
         # 订阅路径评估结果
-        self.path_blocked_sub = self.create_subscription(
-            Bool,
-            '/path_blocked',
-            self.path_blocked_callback,
-            10
-        )
-        self.multipath_sub = self.create_subscription(
-            Int8MultiArray,
-            '/multipath_detected',
-            self.multipath_callback,
-            10
-        )
-        
+        self.path_blocked_sub = self.create_subscription(Bool, '/path_blocked', self.path_blocked_callback, 10)
+        self.multipath_sub = self.create_subscription(Int8MultiArray, '/multipath_detected', self.multipath_callback, 10)
         # 发布计算出的路径指令
-        self.path_pub = self.create_publisher(
-            Twist, 
-            '/auto_cmd_vel', 
-            10
-        )
-        
+        self.path_pub = self.create_publisher(Twist, '/auto_cmd_vel', 10)
         # 发布轮椅意图给Unity端
-        self.wheelchair_intent_pub = self.create_publisher(
-            String,
-            '/wheelchair_intent',
-            10
-        )
+        self.wheelchair_intent_pub = self.create_publisher(String, '/wheelchair_intent', 10)
 
-        # ====== parameters =====
-        self.goal_dist = 3.0  # 吸引点距离(m)
-        self.obstacle_influence = 1.2  # 障碍物影响范围(m) - 增加影响范围
-        self.repulsive_coef = 0.5  # 排斥力系数 - 增强排斥力
-        self.attractive_coef = 0.4  # 吸引力系数 - 增强吸引力
+        # ====== 新的动态吸引子势场参数 =====
+        self.obstacle_influence = 0.6  # 障碍物影响范围(m)
+        self.repulsive_coef = 0.5  # 排斥力系数
+        self.attractive_coef = 0.6  # 吸引力系数
         
-        # 用户意图，默认前进
+        # 用户意图相关参数
         self.user_direction = 1  # 0=左, 1=前, 2=右
+        self.user_input_history = []  # 用户输入历史记录
+        self.max_history_time = 2.0  # 最大历史记录时间(秒)
         
-        # 连续意图生成参数
-        self.continuous_intent_enabled = True  # 启用连续意图
-        self.num_sectors = 5  # 将前方分为5个扇形区域
-        self.sector_angle = math.pi / 3  # 总扇形角度(60度)
-        self.continuous_target_angle = 0.0  # 当前连续目标角度
-        self.intent_smoothing_factor = 0.3  # 意图平滑系数
+        # 三大扇区配置 (左60°, 前60°, 右60°)
+        self.major_sectors = {
+            0: (math.pi/6, math.pi/2),      # 左扇区：30°到90°
+            1: (-math.pi/6, math.pi/6),     # 前扇区：-30°到30°
+            2: (-math.pi/2, -math.pi/6)     # 右扇区：-90°到-30°
+        }
         
-        # 来自路径评估节点的状态
+        # 每个大扇区内的小扇区数量
+        self.sub_sectors_per_major = 6  # 每个60°大扇区分为6个10°小扇区
+        
+        # 动态吸引子参数
+        self.min_attractor_distance = 0.5  # 最小吸引子距离(m)
+        self.max_attractor_distance = 1.0  # 最大吸引子距离(m)
+        self.current_attractor_pos = None   # 当前吸引子位置
+        
+        # 来自路径评估节点的状态（保留用于安全检查）
         self.path_blocked = False
         self.multipath_detected = False
         self.multipath_status = [False, False, False]
@@ -81,10 +60,21 @@ class PotentialFieldPlanner(Node):
         self.get_logger().info('Potential Field Planner Node Initialized (Focuses on Force Calculation)')
 
     def user_dir_callback(self, msg):
-        # 0=左, 1=前, 2=右
+        """接收用户意图并记录历史"""
         if msg.data in [0, 1, 2]:
+            # 记录用户输入历史（时间戳 + 方向）
+            current_time = self.get_clock().now()
+            self.user_input_history.append((current_time, msg.data))
+            
+            # 清除超过2秒的历史记录
+            cutoff_time = current_time - rclpy.duration.Duration(seconds=self.max_history_time)
+            self.user_input_history = [
+                (t, d) for t, d in self.user_input_history 
+                if t >= cutoff_time
+            ]
+            
             self.user_direction = msg.data
-            self.get_logger().info(f'Received user direction: {self.user_direction}')
+            self.get_logger().info(f'User intent: {["left", "forward", "right"][msg.data]}, Input count within 2s: {len(self.user_input_history)}')
         else:
             self.get_logger().warn(f'Invalid user direction: {msg.data}')
     
@@ -102,62 +92,44 @@ class PotentialFieldPlanner(Node):
             if self.multipath_detected:
                 self.get_logger().debug(f'Multipath detected: L={self.multipath_status[0]}, F={self.multipath_status[1]}, R={self.multipath_status[2]}')
     
-    def analyze_continuous_intent(self, ranges, angle_min, angle_increment):
+    def analyze_sectors_openness(self, ranges, angle_min, angle_increment):
         """
-        连续意图分析：将前方区域细分为多个扇区，计算最优的连续移动方向
-        返回连续的目标角度（弧度）
+        分析三大扇区的开放程度
+        返回: dict {方向: {小扇区开放度列表}}
         """
-        if not self.continuous_intent_enabled:
-            # 如果未启用连续意图，返回离散方向对应的角度
-            angle_map = {0: math.pi/4, 1: 0.0, 2: -math.pi/4}
-            return angle_map.get(self.user_direction, 0.0)
+        sector_analysis = {}
         
-        # 将前方60度区域分为5个扇区，每个扇区12度
-        sector_angles = []
-        sector_openness = []
-        
-        # 计算每个扇区的中心角度
-        start_angle = -self.sector_angle / 2  # -30度
-        sector_width = self.sector_angle / self.num_sectors  # 12度
-        
-        for i in range(self.num_sectors):
-            sector_center = start_angle + (i + 0.5) * sector_width
-            sector_angles.append(sector_center)
+        for direction, (start_angle, end_angle) in self.major_sectors.items():
+            sector_width = (end_angle - start_angle) / self.sub_sectors_per_major
+            sub_sector_openness = []
             
-            # 分析该扇区的开放程度
-            openness = self.calculate_sector_openness(
-                ranges, angle_min, angle_increment, 
-                sector_center, sector_width
-            )
-            sector_openness.append(openness)
+            # 分析每个小扇区
+            for i in range(self.sub_sectors_per_major):
+                sub_start = start_angle + i * sector_width
+                sub_end = start_angle + (i + 1) * sector_width
+                sub_center = (sub_start + sub_end) / 2
+                
+                # 计算该小扇区的开放度
+                openness = self.calculate_sub_sector_openness(
+                    ranges, angle_min, angle_increment, 
+                    sub_start, sub_end, sub_center
+                )
+                sub_sector_openness.append({
+                    'center_angle': sub_center,
+                    'openness': openness,
+                    'start_angle': sub_start,
+                    'end_angle': sub_end
+                })
+            
+            sector_analysis[direction] = sub_sector_openness
         
-        # 基于用户意图、环境开放程度计算最优角度
-        optimal_angle = self.calculate_optimal_direction(
-            sector_angles, sector_openness
-        )
-        
-        # 如果没有安全的移动方向，返回None表示应该停止
-        if optimal_angle is None:
-            self.get_logger().error('No safe direction found - emergency stop required')
-            return None
-        
-        # 应用平滑滤波，避免突然的方向变化
-        self.continuous_target_angle = (
-            self.intent_smoothing_factor * optimal_angle + 
-            (1 - self.intent_smoothing_factor) * self.continuous_target_angle
-        )
-        
-        return self.continuous_target_angle
+        return sector_analysis
 
-    def calculate_sector_openness(self, ranges, angle_min, angle_increment, 
-                                 sector_center, sector_width):
+    def calculate_sub_sector_openness(self, ranges, angle_min, angle_increment, 
+                                    start_angle, end_angle, center_angle):
         """
-        计算特定扇区的开放程度
-        返回0-1之间的开放度数值，1表示完全开放，0表示完全阻塞
+        计算小扇区的开放程度
         """
-        sector_min = sector_center - sector_width / 2
-        sector_max = sector_center + sector_width / 2
-        
         distances_in_sector = []
         
         for i, dist in enumerate(ranges):
@@ -166,291 +138,267 @@ class PotentialFieldPlanner(Node):
                 
             angle = angle_min + i * angle_increment
             
-            # 检查是否在当前扇区范围内
-            if sector_min <= angle <= sector_max:
+            # 检查是否在当前小扇区范围内
+            if start_angle <= angle <= end_angle:
                 distances_in_sector.append(dist)
         
         if len(distances_in_sector) == 0:
-            return 0.5  # 无数据时返回中等开放度
+            return 0.0  # 无数据时返回不可通行
         
         distances = np.array(distances_in_sector)
         
-        # 开放度计算方法：
-        # 1. 平均距离权重
+        # 开放度计算
         avg_distance = np.mean(distances)
-        distance_score = min(1.0, avg_distance / 3.0)  # 3米为满分距离
-        
-        # 2. 最小距离安全性
         min_distance = np.min(distances)
-        safety_score = min(1.0, min_distance / 1.0)  # 1米为安全距离
         
-        # 3. 距离一致性（避免障碍物过于密集的区域）
-        distance_std = np.std(distances)
-        consistency_score = max(0.0, 1.0 - distance_std / 1.0)
-
-        # 综合开放度评分
-        openness = (
-            0.4 * distance_score +     # 40%权重给平均距离
-            0.4 * safety_score +       # 40%权重给最小安全距离  
-            0.2 * consistency_score    # 20%权重给一致性
-        )
+        # 基础开放度：基于平均距离
+        base_openness = min(1.0, avg_distance / 3.0)
         
-        return max(0.0, min(1.0, openness))
-
-    def calculate_optimal_direction(self, sector_angles, sector_openness):
-        """
-        基于扇区开放度和用户意图计算最优移动方向
-        """
-        # 权重配置
-        user_preference_weight = 0.6    # 用户意图权重
-        environment_weight = 0.4        # 环境开放度权重
-
-        # 将用户意图转换为偏好角度
-        user_angle_map = {0: math.pi/4, 1: 0.0, 2: -math.pi/4}
-        preferred_angle = user_angle_map.get(self.user_direction, 0.0)
-        
-        # 计算每个扇区的综合评分
-        sector_scores = []
-        
-        for i, (angle, openness) in enumerate(zip(sector_angles, sector_openness)):
-            # 1. 用户偏好评分
-            angle_diff = abs(angle - preferred_angle)
-            if angle_diff > math.pi:
-                angle_diff = 2 * math.pi - angle_diff
-            user_score = math.exp(-2 * angle_diff)
-            
-            # 2. 环境开放度评分
-            env_score = openness
-            
-            # 综合评分
-            total_score = (
-                user_preference_weight * user_score + 
-                environment_weight * env_score
-            )
-            
-            sector_scores.append(total_score)
-        
-        # 找到评分最高的扇区
-        best_sector_idx = np.argmax(sector_scores)
-        optimal_angle = sector_angles[best_sector_idx]
-        
-        # 安全性检查：如果最优扇区仍然不够安全，强制选择最安全的扇区
-        if sector_openness[best_sector_idx] < 0.2:
-            self.get_logger().warn(
-                f'Best sector unsafe (openness={sector_openness[best_sector_idx]:.2f}), '
-                f'forcing safety override'
-            )
-            
-            # 强制选择开放度最高的扇区
-            safest_sector_idx = np.argmax(sector_openness)
-            if sector_openness[safest_sector_idx] > 0.4:
-                optimal_angle = sector_angles[safest_sector_idx]
-                self.get_logger().info(
-                    f'Safety override: selected sector {safest_sector_idx} '
-                    f'with angle {math.degrees(optimal_angle):.1f}°'
-                )
-            else:
-                # 如果没有安全扇区，返回None表示应该停止
-                self.get_logger().error('No safe sectors available! Should stop.')
-                return None
-        
-        return optimal_angle
-
-    def check_lateral_space(self, ranges, angle_min, angle_increment, start_angle, end_angle):
-        """
-        检查指定角度范围内的平均距离（空间大小）
-        """
-        distances = []
-        
-        for i, dist in enumerate(ranges):
-            if not math.isfinite(dist):
-                continue
-                
-            angle = angle_min + i * angle_increment
-            
-            if start_angle <= angle <= end_angle:
-                distances.append(dist)
-        
-        if distances:
-            return np.mean(distances)
+        # 安全性惩罚：如果最小距离太小，大幅降低开放度
+        if min_distance < 0.8:
+            safety_penalty = 0.8  # 大幅降低
+        elif min_distance < 1.5:
+            safety_penalty = 0.5  # 中等降低
         else:
-            return 0.0
+            safety_penalty = 0.0  # 无惩罚
+        
+        final_openness = base_openness * (1.0 - safety_penalty)
+        return max(0.0, min(1.0, final_openness))
+
+    def find_optimal_attractor_position(self, sector_analysis):
+        """
+        基于用户意图和扇区分析，找到最优吸引子位置
+        """
+        # 获取用户偏好的大扇区
+        user_preferred_sector = sector_analysis[self.user_direction]
+        
+        # 在偏好扇区中找到开放度最高的小扇区
+        best_sub_sector = max(user_preferred_sector, key=lambda x: x['openness'])
+        
+        # 如果用户偏好扇区的最佳开放度太低，考虑其他扇区
+        if best_sub_sector['openness'] < 0.3:
+            self.get_logger().warn(f'User preferred sector openness is low ({best_sub_sector["openness"]:.2f}), searching for alternatives.')
+
+            # 寻找所有扇区中开放度最高的
+            all_sub_sectors = []
+            for direction, sub_sectors in sector_analysis.items():
+                for sub_sector in sub_sectors:
+                    sub_sector['major_direction'] = direction
+                    all_sub_sectors.append(sub_sector)
+            
+            # 按开放度排序
+            all_sub_sectors.sort(key=lambda x: x['openness'], reverse=True)
+            
+            # 优先考虑与用户意图相近的扇区
+            for sub_sector in all_sub_sectors:
+                if sub_sector['openness'] > 0.4:  # 足够的开放度
+                    best_sub_sector = sub_sector
+                    best_sub_sector['major_direction'] = sub_sector['major_direction']
+                    self.get_logger().info(f'Selected alternative direction: {["left", "forward", "right"][best_sub_sector["major_direction"]]} sector')
+                    break
+        else:
+            best_sub_sector['major_direction'] = self.user_direction
+        
+        # 计算吸引子距离（基于用户输入频率）
+        input_frequency = len(self.user_input_history)
+        if input_frequency <= 2:
+            attractor_distance = self.max_attractor_distance  # 低频输入，远距离
+        elif input_frequency >= 8:
+            attractor_distance = self.min_attractor_distance  # 高频输入，近距离
+        else:
+            # 线性插值
+            ratio = (input_frequency - 2) / (8 - 2)
+            attractor_distance = self.max_attractor_distance - ratio * (self.max_attractor_distance - self.min_attractor_distance)
+        
+        # 计算吸引子位置
+        attractor_angle = best_sub_sector['center_angle']
+        attractor_x = attractor_distance * math.cos(attractor_angle)
+        attractor_y = attractor_distance * math.sin(attractor_angle)
+
+        self.get_logger().debug(f'Attractor position: Angle={math.degrees(attractor_angle):.1f}°, Distance={attractor_distance:.2f}m, Openness={best_sub_sector["openness"]:.2f}')
+
+        return {
+            'x': attractor_x,
+            'y': attractor_y,
+            'angle': attractor_angle,
+            'distance': attractor_distance,
+            'openness': best_sub_sector['openness'],
+            'major_direction': best_sub_sector['major_direction']
+        }
+
+    def check_attractor_visibility(self, attractor_pos, ranges, angle_min, angle_increment):
+        """
+        检查吸引子位置是否在激光探测范围内且无障碍物阻挡
+        """
+        attractor_angle = attractor_pos['angle']
+        attractor_distance = attractor_pos['distance']
+        
+        # 找到最接近吸引子角度的激光射线
+        target_ray_index = int((attractor_angle - angle_min) / angle_increment)
+        target_ray_index = max(0, min(target_ray_index, len(ranges) - 1))
+        
+        measured_distance = ranges[target_ray_index]
+        
+        # 检查该方向是否有足够的可见距离
+        if math.isfinite(measured_distance) and measured_distance > attractor_distance:
+            return True  # 吸引子位置可见且无阻挡
+        else:
+            # 吸引子位置被障碍物阻挡，需要调整
+            # 将吸引子拉近到安全距离
+            safe_distance = min(measured_distance * 0.8, attractor_distance)
+            if safe_distance > 1.0:  # 至少保持1米距离
+                attractor_pos['distance'] = safe_distance
+                attractor_pos['x'] = safe_distance * math.cos(attractor_angle)
+                attractor_pos['y'] = safe_distance * math.sin(attractor_angle)
+                self.get_logger().debug(f'Attractor position blocked by obstacle, adjusted distance to {safe_distance:.2f}m')
+                return True
+            else:
+                self.get_logger().warn('Attractor position severely blocked, unable to place safely')
+                return False
 
     def laser_callback(self, msg):
         self.laser_data = msg
         # self.get_logger().debug('收到激光扫描数据')
     
     def calculate_path(self):
+        """
+        新的势场路径计算方法：动态吸引子 + 排斥力
+        """
         if self.laser_data is None:
-            self.get_logger().warn('Laser data not received yet')
+            self.get_logger().warn('Laser data not received')
             return
 
         ranges = self.laser_data.ranges
         angle_min = self.laser_data.angle_min
         angle_increment = self.laser_data.angle_increment
 
-        # 使用连续意图分析计算最优移动方向
-        continuous_goal_angle = self.analyze_continuous_intent(
-            ranges, angle_min, angle_increment
-        )
-
-        # 检查是否需要紧急停止（连续意图分析返回None）
-        emergency_stop_due_to_safety = (continuous_goal_angle is None)
+        # 1. 分析所有扇区的开放程度
+        sector_analysis = self.analyze_sectors_openness(ranges, angle_min, angle_increment)
         
-        if emergency_stop_due_to_safety:
-            self.get_logger().error('Emergency stop triggered by safety analysis')
-            continuous_goal_angle = 0.0  # 设置默认值以避免后续计算错误
-
-        # 基于连续意图设置吸引力方向
-        goal = Point()
-        goal.x = self.goal_dist * math.cos(continuous_goal_angle)
-        goal.y = self.goal_dist * math.sin(continuous_goal_angle)
-
-        # 计算吸引力 (指向连续计算的目标点)
-        att_force_x = self.attractive_coef * goal.x
-        att_force_y = self.attractive_coef * goal.y
-
-        # 计算激光数据中的排斥力
+        # 2. 根据用户意图和扇区分析找到最优吸引子位置
+        attractor_pos = self.find_optimal_attractor_position(sector_analysis)
+        
+        # 3. 检查吸引子位置的可见性和安全性
+        attractor_valid = self.check_attractor_visibility(attractor_pos, ranges, angle_min, angle_increment)
+        
+        if not attractor_valid:
+            # 如果无法安全放置吸引子，停止运动
+            cmd = Twist()
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            self.path_pub.publish(cmd)
+            
+            intent_msg = String()
+            intent_msg.data = "STOP: Unable to place attractor safely"
+            self.wheelchair_intent_pub.publish(intent_msg)
+            return
+        
+        # 4. 更新当前吸引子位置
+        self.current_attractor_pos = attractor_pos
+        
+        # 5. 计算吸引力（指向动态吸引子）
+        att_force_x = self.attractive_coef * attractor_pos['x']
+        att_force_y = self.attractive_coef * attractor_pos['y']
+        
+        # 6. 计算排斥力（来自所有障碍物）
         rep_force_x = 0.0
         rep_force_y = 0.0
         
-        # 检测前方是否有近距离障碍物，如果有则增强侧向避障
-        front_obstacle_detected = False
-        min_front_distance = float('inf')
-
         for i, dist in enumerate(ranges):
-            if not math.isfinite(dist):
+            if not math.isfinite(dist) or dist > self.obstacle_influence:
                 continue
+                
             angle = angle_min + i * angle_increment
             
-            # 检查前方±30度范围内的障碍物
-            if abs(angle) < math.pi/6 and dist < 1.5:  # 前方1.5米内有障碍
-                front_obstacle_detected = True
-                min_front_distance = min(min_front_distance, dist)
+            # 计算排斥力
+            repulsive_magnitude = self.repulsive_coef * (1.0 / dist - 1.0 / self.obstacle_influence)
             
-            if dist < self.obstacle_influence:
-                magnitude = self.repulsive_coef * (1.0 / dist - 1.0 / self.obstacle_influence)
-                obstacle_x = dist * math.cos(angle)
-                obstacle_y = dist * math.sin(angle)
-                if obstacle_x == 0 and obstacle_y == 0:
-                    continue
-                norm = math.sqrt(obstacle_x**2 + obstacle_y**2)
-                obstacle_x /= norm
-                obstacle_y /= norm
-                rep_force_x += magnitude * (-obstacle_x)
-                rep_force_y += magnitude * (-obstacle_y)
-
-        # 如果前方有障碍物，增强用户意图方向的侧向分量
-        if front_obstacle_detected:
-            avoidance_boost = 0.3 * (2.0 - min_front_distance)  # 距离越近，增强越多
-            if self.user_direction == 0:  # 用户想要左转
-                att_force_y += avoidance_boost  # 增强左转
-                self.get_logger().debug(f'Front obstacle detected at {min_front_distance:.2f}m, boosting LEFT by {avoidance_boost:.2f}')
-            elif self.user_direction == 2:  # 用户想要右转
-                att_force_y -= avoidance_boost  # 增强右转
-                self.get_logger().debug(f'Front obstacle detected at {min_front_distance:.2f}m, boosting RIGHT by {avoidance_boost:.2f}')
-            # 如果用户想要前进但前方有障碍，选择开放度更好的一侧
-            elif self.user_direction == 1:
-                # 检查左右两侧的空间
-                left_space = self.check_lateral_space(ranges, angle_min, angle_increment, math.pi/6, math.pi/3)
-                right_space = self.check_lateral_space(ranges, angle_min, angle_increment, -math.pi/3, -math.pi/6)
+            # 障碍物在激光坐标系中的位置
+            obstacle_x = dist * math.cos(angle)
+            obstacle_y = dist * math.sin(angle)
+            
+            # 从障碍物指向轮椅的单位向量（排斥力方向）
+            if obstacle_x == 0 and obstacle_y == 0:
+                continue
                 
-                if left_space > right_space + 0.3:  # 左侧明显更开阔
-                    att_force_y += avoidance_boost
-                    self.get_logger().debug(f'Front obstacle, auto-choosing LEFT (space: L={left_space:.2f}, R={right_space:.2f})')
-                elif right_space > left_space + 0.3:  # 右侧明显更开阔
-                    att_force_y -= avoidance_boost
-                    self.get_logger().debug(f'Front obstacle, auto-choosing RIGHT (space: L={left_space:.2f}, R={right_space:.2f})')
-
-        # 合并吸引力和排斥力
+            norm = math.sqrt(obstacle_x**2 + obstacle_y**2)
+            rep_force_x += repulsive_magnitude * (-obstacle_x / norm)
+            rep_force_y += repulsive_magnitude * (-obstacle_y / norm)
+        
+        # 7. 合并吸引力和排斥力
         total_force_x = att_force_x + rep_force_x
         total_force_y = att_force_y + rep_force_y
-
-        # 根据路径评估结果和势场力决定是否停止
-        should_stop = False
-        wheelchair_intent = ""
         
-        # 计算势场强度来判断是否有足够的避障能力
+        # 8. 检查是否需要停止（基于势场强度，多路径由融合节点处理）
         total_force_magnitude = math.sqrt(total_force_x**2 + total_force_y**2)
         
-        if emergency_stop_due_to_safety:
-            should_stop = True
-            wheelchair_intent = "EMERGENCY_STOP: No safe movement direction found"
-        elif self.multipath_detected:
-            # 多路径情况：停止等待用户选择
-            should_stop = True
-            wheelchair_intent = f"WAITING_FOR_USER: Multiple paths available - Left:{self.multipath_status[0]} Front:{self.multipath_status[1]} Right:{self.multipath_status[2]}"
-        elif self.path_blocked and total_force_magnitude < 0.1:
-            # 只有在路径被阻塞且势场力很小时才停止
-            should_stop = True
-            wheelchair_intent = "OBSTACLE_AVOIDANCE: Path blocked and insufficient force to navigate"
-        else:
-            # 正常移动状态 - 包含连续意图和避障信息
-            direction_names = ["LEFT", "FORWARD", "RIGHT"]
-            user_intent_name = direction_names[self.user_direction]
-            
-            # 将连续目标角度转换为度数
-            target_angle_deg = math.degrees(continuous_goal_angle)
-            
-            # 检查是否正在进行避障
-            if self.path_blocked and total_force_magnitude >= 0.1:
-                # 路径被阻塞但势场力足够进行避障
-                wheelchair_intent = (
-                    f"FORCE_NAVIGATION: User intent={user_intent_name}, "
-                    f"Force direction={math.degrees(math.atan2(total_force_y, total_force_x)):.1f}°, "
-                    f"Force magnitude={total_force_magnitude:.2f}, "
-                    f"Using potential field to navigate around obstacles"
-                )
-            elif abs(continuous_goal_angle) > math.pi/6:  # 偏离正前方超过30度
-                wheelchair_intent = (
-                    f"CONTINUOUS_AVOIDING: User intent={user_intent_name}, "
-                    f"Avoidance direction={target_angle_deg:.1f}°, "
-                    f"Active obstacle avoidance"
-                )
-            else:
-                wheelchair_intent = (
-                    f"CONTINUOUS_MOVING: User intent={user_intent_name}, "
-                    f"Computed direction={target_angle_deg:.1f}°, "
-                    f"Normal navigation"
-                )
+        should_stop = False
+        stop_reason = ""
         
-        # 发布轮椅意图给Unity端
-        intent_msg = String()
-        intent_msg.data = wheelchair_intent
-        self.wheelchair_intent_pub.publish(intent_msg)
+        if total_force_magnitude < 0.05:
+            should_stop = True
+            stop_reason = "Attractive force too weak"
+        # 移除多路径自动停止逻辑，让融合节点处理
+        # elif self.multipath_detected and not self.user_input_history:
+        #     should_stop = True
+        #     stop_reason = "Multiple paths detected, waiting for user input"
 
-        # 转换为线速度和角速度
+        # 9. 生成运动命令
         cmd = Twist()
+        
         if should_stop:
             cmd.linear.x = 0.0
             cmd.angular.z = 0.0
-            stop_reason = "Multiple paths" if self.multipath_detected else "Insufficient navigation force"
-            self.get_logger().warn(f'Stopping: {stop_reason}')
+            wheelchair_intent = f"STOP: {stop_reason}"
         else:
-            # 根据前方障碍情况调整速度
-            if front_obstacle_detected and min_front_distance < 1.0:
-                # 前方有近距离障碍，降低前进速度，增强转向能力
-                max_linear_speed = 0.2 + 0.3 * (min_front_distance / 1.0)  # 距离越近速度越慢
-                max_angular_speed = 0.7  # 增强转向能力
-            else:
-                # 正常情况
-                max_linear_speed = 0.5
-                max_angular_speed = 0.5
+            # 将势场力转换为运动命令
+            # X方向力控制前进速度，Y方向力控制转向
             
-            cmd.linear.x = min(max_linear_speed, max(0.0, total_force_x))
-            cmd.angular.z = min(max_angular_speed, max(-max_angular_speed, total_force_y))
+            # 前进速度：基于X方向力，限制在合理范围内
+            cmd.linear.x = max(0.0, min(0.6, total_force_x))
+            
+            # 转向速度：基于Y方向力
+            cmd.angular.z = max(-0.8, min(0.8, total_force_y))
+            
+            # 根据距离障碍物的远近调整速度
+            min_obstacle_dist = float('inf')
+            for dist in ranges:
+                if math.isfinite(dist):
+                    min_obstacle_dist = min(min_obstacle_dist, dist)
+            
+            if min_obstacle_dist < 1.0:
+                # 接近障碍物时降低速度
+                speed_factor = min_obstacle_dist / 1.0
+                cmd.linear.x *= speed_factor
+                cmd.angular.z *= 1.2  # 增强转向能力
+            
+            # 生成意图描述
+            direction_names = ["Left", "Forward", "Right"]
+            user_intent_name = direction_names[self.user_direction]
+            attractor_direction_name = direction_names[attractor_pos['major_direction']]
+            
+            wheelchair_intent = (
+                f"DYNAMIC_NAVIGATION: User intent={user_intent_name}, "
+                f"Attractor direction={attractor_direction_name}, "
+                f"Attractor distance={attractor_pos['distance']:.1f}m, "
+                f"Openness={attractor_pos['openness']:.2f}, "
+                f"Input frequency={len(self.user_input_history)}"
+            )
         
-        # 记录详细日志
-        self.get_logger().debug(f'Path blocked: {self.path_blocked}, Multipath: {self.multipath_detected}')
-        self.get_logger().debug(f'Emergency safety stop: {emergency_stop_due_to_safety}')
-        self.get_logger().debug(f'Continuous target angle: {math.degrees(continuous_goal_angle):.1f}°')
-        self.get_logger().debug(f'Should stop: {should_stop}')
-        self.get_logger().debug(f'Wheelchair intent: {wheelchair_intent}')
-        self.get_logger().debug(f'Total force: ({total_force_x:.2f}, {total_force_y:.2f})')
-        self.get_logger().debug(f'Command: linear.x={cmd.linear.x:.2f}, angular.z={cmd.angular.z:.2f})')
-        
-        # 发布移动指令
+        # 10. 发布命令和意图
         self.path_pub.publish(cmd)
+        
+        intent_msg = String()
+        intent_msg.data = wheelchair_intent
+        self.wheelchair_intent_pub.publish(intent_msg)
+        
+        # 11. 详细日志
+        self.get_logger().debug(f'Attractor position: ({attractor_pos["x"]:.2f}, {attractor_pos["y"]:.2f})')
+        self.get_logger().debug(f'Attractive force: ({att_force_x:.2f}, {att_force_y:.2f})')
+        self.get_logger().debug(f'Repulsive force: ({rep_force_x:.2f}, {rep_force_y:.2f})')
+        self.get_logger().debug(f'Total force: ({total_force_x:.2f}, {total_force_y:.2f})')
+        self.get_logger().debug(f'Command: linear.x={cmd.linear.x:.2f}, angular.z={cmd.angular.z:.2f}')
+        self.get_logger().info(wheelchair_intent)
 
 def main(args=None):
     rclpy.init(args=args)

@@ -1,4 +1,11 @@
 # path_eval_node.py
+# 路径评估节点：处理来自Unity仿真环境的激光雷达数据
+# 
+# 重要说明：
+# - 激光雷达数据来源：Unity仿真环境
+# - 坐标系转换：Unity坐标系 -> ROS坐标系
+# - 方向定义：需要根据Unity的坐标系正确映射左右方向
+#
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan, Range
@@ -29,13 +36,13 @@ class PathEvalNode(Node):
         self.obstacle_detection_history = []
         
         # 检测参数
-        self.path_detection_distance = 2.0
-        self.path_width_threshold = 1.0
-        self.wall_detection_distance = 0.5
-        self.min_obstacle_dist = 0.8
-        
+        self.path_detection_distance = 2.0 # 路径检测距离(m)
+        self.path_width_threshold = 1.0 # 路径宽度阈值(m)
+        self.wall_detection_distance = 0.5 # 墙壁检测距离(m)
+        self.min_obstacle_dist = 0.5 # 最小障碍物距离(m)
+
         self.timer = self.create_timer(0.2, self.timer_callback)  # 提高频率
-        self.get_logger().info('PathEvalNode initialized with LIDAR.')
+        self.get_logger().info('PathEvalNode initialized - Processing LIDAR data from Unity simulation environment')
 
     def lidar_callback(self, msg):
         self.lidar_ranges = np.array(msg.ranges)
@@ -125,26 +132,78 @@ class PathEvalNode(Node):
         
         valid_points = np.array(valid_points)
         
-        # 定义三个检测区域的向量方向
-        left_direction = np.array([math.cos(math.pi/4), math.sin(math.pi/4)])    # 45度方向
-        front_direction = np.array([1.0, 0.0])                                   # 0度方向  
-        right_direction = np.array([math.cos(-math.pi/4), math.sin(-math.pi/4)]) # -45度方向
+        # 定义三个60度扇区划分（与potential_field_planner统一）
+        # 前方180度范围，每个方向各60度
+        # 左扇区：30°到90° (60度)
+        # 前扇区：-30°到30° (60度)  
+        # 右扇区：-90°到-30° (60度)
         
-        detection_vectors = [left_direction, front_direction, right_direction]
-        detection_names = ["LEFT", "FRONT", "RIGHT"]
+        sector_definitions = {
+            0: (math.pi/6, math.pi/2),      # 左扇区：30°到90°
+            1: (-math.pi/6, math.pi/6),     # 前扇区：-30°到30°
+            2: (-math.pi/2, -math.pi/6)     # 右扇区：-90°到-30°
+        }
         
+        sector_names = ["LEFT", "FRONT", "RIGHT"]
         paths_status = [False, False, False]
         
-        for dir_idx, detection_vec in enumerate(detection_vectors):
-            # 计算该方向的通路状态
-            path_clear = self.analyze_path_direction_vector(
-                valid_points, detection_vec, detection_names[dir_idx]
+        for sector_idx, (start_angle, end_angle) in sector_definitions.items():
+            # 分析该扇区的通路状态
+            path_clear = self.analyze_sector_openness(
+                valid_points, start_angle, end_angle, sector_names[sector_idx]
             )
-            paths_status[dir_idx] = path_clear
+            paths_status[sector_idx] = path_clear
         
         return paths_status
 
-    def analyze_path_direction_vector(self, points, direction_vector, direction_name):
+    def analyze_sector_openness(self, valid_points, start_angle, end_angle, sector_name):
+        """
+        分析特定扇区的开放程度
+        参数:
+            valid_points: 有效的激光点阵列
+            start_angle: 扇区起始角度
+            end_angle: 扇区结束角度  
+            sector_name: 扇区名称（用于日志）
+        返回:
+            bool: 该扇区是否通畅
+        """
+        if len(valid_points) == 0:
+            return False
+            
+        # 将极坐标转换为角度
+        angles = np.arctan2(valid_points[:, 1], valid_points[:, 0])
+        
+        # 处理角度跨越问题（如-90°到-30°）
+        if start_angle > end_angle:
+            # 跨越0度的情况，例如从330°到30°
+            sector_mask = (angles >= start_angle) | (angles <= end_angle)
+        else:
+            # 正常情况
+            sector_mask = (angles >= start_angle) & (angles <= end_angle)
+        
+        sector_points = valid_points[sector_mask]
+        
+        if len(sector_points) == 0:
+            self.get_logger().debug(f"{sector_name} sector: No points in range")
+            return True  # 没有障碍物点，认为通畅
+        
+        # 计算该扇区内的最近距离
+        distances = np.linalg.norm(sector_points, axis=1)
+        min_distance = np.min(distances)
+        avg_distance = np.mean(distances)
+        
+        # 判断通畅标准：最近距离>1.2m 且 平均距离>1.5m
+        is_clear = min_distance > 1.2 and avg_distance > 1.5
+        
+        self.get_logger().debug(
+            f"{sector_name} sector: min_dist={min_distance:.2f}m, "
+            f"avg_dist={avg_distance:.2f}m, points={len(sector_points)}, "
+            f"clear={is_clear}"
+        )
+        
+        return is_clear
+
+    def analyze_path_direction_vector(self, valid_points, direction_vector, direction_name):
         """
         分析特定方向向量上的通路状态
         返回该方向是否有清晰的通路
@@ -160,7 +219,7 @@ class PathEvalNode(Node):
         points_in_direction = []
         distances_in_direction = []
         
-        for point in points:
+        for point in valid_points:
             # 计算点相对于原点的角度
             point_angle = math.atan2(point[1], point[0])
             angle_diff = abs(point_angle - target_angle)
