@@ -52,102 +52,117 @@ class PathEvalNode(Node):
     # def ultrasonic_callback(self, msg):
     #     self.front_ultrasonic = msg.range
 
-    def detect_multiple_paths_vector(self, ranges, angle_min, angle_increment):
+    def analyze_sectors_openness(self, ranges, angle_min, angle_increment):
         """
-        使用向量方法检测多路径
-        通过分析激光点云的向量分布来识别通道和路口
+        分析三大扇区的开放程度（从potential_field_planner移植的高级方法）
+        返回: dict {方向: {小扇区开放度列表}}
         """
-        # 将极坐标转换为笛卡尔坐标系下的向量
-        valid_points = []
-        valid_angles = []
+        # 定义三个主扇区：与potential_field_planner一致的Unity坐标系
+        major_sectors = {
+            'left': (-math.pi/2, -math.pi/6),    # 左扇区：-90°到-30°
+            'front': (-math.pi/6, math.pi/6),    # 前扇区：-30°到30°
+            'right': (math.pi/6, math.pi/2)      # 右扇区：30°到90°
+        }
+        
+        sub_sectors_per_major = 6  # 每个主扇区分为6个子扇区
+        sector_analysis = {}
+        
+        for direction, (start_angle, end_angle) in major_sectors.items():
+            sector_width = (end_angle - start_angle) / sub_sectors_per_major
+            sub_sector_openness = []
+            
+            # 分析每个小扇区
+            for i in range(sub_sectors_per_major):
+                sub_start = start_angle + i * sector_width
+                sub_end = start_angle + (i + 1) * sector_width
+                sub_center = (sub_start + sub_end) / 2
+                
+                # 计算该小扇区的开放度
+                openness = self.calculate_sub_sector_openness(
+                    ranges, angle_min, angle_increment, 
+                    sub_start, sub_end, sub_center
+                )
+                sub_sector_openness.append({
+                    'center_angle': sub_center,
+                    'openness': openness,
+                    'start_angle': sub_start,
+                    'end_angle': sub_end
+                })
+            
+            sector_analysis[direction] = sub_sector_openness
+        
+        return sector_analysis
+
+    def calculate_sub_sector_openness(self, ranges, angle_min, angle_increment, 
+                                    start_angle, end_angle, center_angle):
+        """
+        计算小扇区的开放程度（从potential_field_planner移植的高级方法）
+        """
+        distances_in_sector = []
         
         for i, dist in enumerate(ranges):
-            if not math.isfinite(dist) or dist > 5.0:  # 限制最大检测距离
+            if not math.isfinite(dist):
                 continue
                 
             angle = angle_min + i * angle_increment
-            x = dist * math.cos(angle)
-            y = dist * math.sin(angle)
             
-            valid_points.append([x, y])
-            valid_angles.append(angle)
+            # 检查是否在当前小扇区范围内
+            if start_angle <= angle <= end_angle:
+                distances_in_sector.append(dist)
         
-        if len(valid_points) < 10:  # 需要足够的点进行分析
-            return [False, True, False]
+        if len(distances_in_sector) == 0:
+            return 0.0  # 无数据时返回不可通行
         
-        valid_points = np.array(valid_points)
+        distances = np.array(distances_in_sector)
         
-        # 定义三个60度扇区划分（与potential_field_planner统一）
-        # 前方180度范围，每个方向各60度
-        # 注意：根据Unity雷达数据实际测试，需要调整左右定义
-        # 左扇区：-90°到-30° (实际对应Unity中的左侧)
-        # 前扇区：-30°到30° (60度)  
-        # 右扇区：30°到90° (实际对应Unity中的右侧)
+        # 开放度计算
+        avg_distance = np.mean(distances)
+        min_distance = np.min(distances)
         
-        sector_definitions = {
-            0: (-math.pi/2, -math.pi/6),    # 左扇区：-90°到-30° (调整后)
-            1: (-math.pi/6, math.pi/6),     # 前扇区：-30°到30°
-            2: (math.pi/6, math.pi/2)       # 右扇区：30°到90° (调整后)
-        }
+        # 基础开放度：基于平均距离
+        base_openness = min(1.0, avg_distance / 3.0)
         
-        sector_names = ["LEFT", "FRONT", "RIGHT"]
-        paths_status = [False, False, False]
+        # 安全性惩罚：如果最小距离太小，大幅降低开放度
+        if min_distance < 0.8:
+            safety_penalty = 0.8  # 大幅降低
+        elif min_distance < 1.5:
+            safety_penalty = 0.5  # 中等降低
+        else:
+            safety_penalty = 0.0  # 无惩罚
         
-        for sector_idx, (start_angle, end_angle) in sector_definitions.items():
-            # 分析该扇区的通路状态
-            path_clear = self.analyze_sector_openness(
-                valid_points, start_angle, end_angle, sector_names[sector_idx]
-            )
-            paths_status[sector_idx] = path_clear
+        final_openness = base_openness * (1.0 - safety_penalty)
+        return max(0.0, min(1.0, final_openness))
+
+    def detect_multiple_paths_vector(self, ranges, angle_min, angle_increment):
+        """
+        基于高级扇区分析的多路径检测（使用potential_field方法的松耦合实现）
+        """
+        # 使用高级扇区分析方法
+        sector_analysis = self.analyze_sectors_openness(ranges, angle_min, angle_increment)
+        
+        # 转换为简单的通路状态用于兼容现有接口
+        paths_status = []
+        sector_order = ['left', 'front', 'right']
+        
+        for direction in sector_order:
+            if direction in sector_analysis:
+                # 计算该主扇区的平均开放度
+                openness_values = [sub['openness'] for sub in sector_analysis[direction]]
+                avg_openness = np.mean(openness_values) if openness_values else 0.0
+                max_openness = np.max(openness_values) if openness_values else 0.0
+                
+                # 通路判断：平均开放度>0.3 且 最大开放度>0.4
+                is_clear = avg_openness > 0.3 and max_openness > 0.4
+                paths_status.append(is_clear)
+                
+                self.get_logger().debug(
+                    f"{direction.upper()} sector: avg_openness={avg_openness:.3f}, "
+                    f"max_openness={max_openness:.3f}, clear={is_clear}"
+                )
+            else:
+                paths_status.append(False)
         
         return paths_status
-
-    def analyze_sector_openness(self, valid_points, start_angle, end_angle, sector_name):
-        """
-        分析特定扇区的开放程度
-        参数:
-            valid_points: 有效的激光点阵列
-            start_angle: 扇区起始角度
-            end_angle: 扇区结束角度  
-            sector_name: 扇区名称（用于日志）
-        返回:
-            bool: 该扇区是否通畅
-        """
-        if len(valid_points) == 0:
-            return False
-            
-        # 将极坐标转换为角度
-        angles = np.arctan2(valid_points[:, 1], valid_points[:, 0])
-        
-        # 处理角度跨越问题（如-90°到-30°）
-        if start_angle > end_angle:
-            # 跨越0度的情况，例如从330°到30°
-            sector_mask = (angles >= start_angle) | (angles <= end_angle)
-        else:
-            # 正常情况
-            sector_mask = (angles >= start_angle) & (angles <= end_angle)
-        
-        sector_points = valid_points[sector_mask]
-        
-        if len(sector_points) == 0:
-            self.get_logger().debug(f"{sector_name} sector: No points in range")
-            return True  # 没有障碍物点，认为通畅
-        
-        # 计算该扇区内的最近距离
-        distances = np.linalg.norm(sector_points, axis=1)
-        min_distance = np.min(distances)
-        avg_distance = np.mean(distances)
-        
-        # 判断通畅标准：最近距离>1.2m 且 平均距离>1.5m
-        is_clear = min_distance > 1.2 and avg_distance > 1.5
-        
-        self.get_logger().debug(
-            f"{sector_name} sector: min_dist={min_distance:.2f}m, "
-            f"avg_dist={avg_distance:.2f}m, points={len(sector_points)}, "
-            f"clear={is_clear}"
-        )
-        
-        return is_clear
 
     def timer_callback(self):
         if len(self.lidar_ranges) == 0 or self.laser_data is None:
