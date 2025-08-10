@@ -35,11 +35,11 @@ class PotentialFieldPlanner(Node):
         self.user_input_history = []  # 用户输入历史记录 - 用于计算输入频率
         self.max_history_time = 2.0  # 最大历史记录时间(秒) - 超过此时间的输入将被清除
         
-        # 三大扇区配置 (左60°, 前60°, 右60°) - 与path_eval_node保持一致
+        # 三大扇区配置 (左60°, 前60°, 右60°) - Unity坐标系：左右反转
         self.major_sectors = {
-            0: (-math.pi/2, -math.pi/6),    # 左扇区：-90°到-30°
-            1: (-math.pi/6, math.pi/6),     # 前扇区：-30°到30°
-            2: (math.pi/6, math.pi/2)       # 右扇区：30°到90°
+            0: (-math.pi/2, -math.pi/6),        # 左扇区：-90°到-30° (Unity负角度=左侧)
+            1: (-math.pi/6, math.pi/6),         # 前扇区：-30°到30° (Unity 0°=前方)
+            2: (math.pi/6, math.pi/2)           # 右扇区：30°到90° (Unity正角度=右侧)
         }
         
         # 每个大扇区内的小扇区数量 - 用于精细化扇区分析
@@ -161,13 +161,13 @@ class PotentialFieldPlanner(Node):
         # 计算吸引子距离（基于用户输入频率）
         input_frequency = len(self.user_input_history)
         if input_frequency <= 2:
-            attractor_distance = self.max_attractor_distance  # 低频输入，远距离
+            attractor_distance = self.min_attractor_distance  # 低频输入，近距离
         elif input_frequency >= 8:
-            attractor_distance = self.min_attractor_distance  # 高频输入，近距离
+            attractor_distance = self.max_attractor_distance  # 高频输入，远距离
         else:
-            # 线性插值
+            # 线性插值：频率越高，距离越远
             ratio = (input_frequency - 2) / (8 - 2)
-            attractor_distance = self.max_attractor_distance - ratio * (self.max_attractor_distance - self.min_attractor_distance)
+            attractor_distance = self.min_attractor_distance + ratio * (self.max_attractor_distance - self.min_attractor_distance)
         
         # 确保吸引子距离不超过该方向的最大可见距离
         if best_distance > 0:
@@ -177,7 +177,7 @@ class PotentialFieldPlanner(Node):
         attractor_x = attractor_distance * math.cos(best_angle)
         attractor_y = attractor_distance * math.sin(best_angle)
 
-        self.get_logger().debug(f'Attractor position: Angle={math.degrees(best_angle):.1f}°, Distance={attractor_distance:.2f}m, Openness={best_openness:.2f}')
+        # self.get_logger().debug(f'Attractor position: Angle={math.degrees(best_angle):.1f}°, Distance={attractor_distance:.2f}m, Openness={best_openness:.2f}, Input_freq={input_frequency}, Laser_range={best_distance:.2f}m}')
 
         return {
             'x': attractor_x,
@@ -208,7 +208,7 @@ class PotentialFieldPlanner(Node):
             # 吸引子位置被障碍物阻挡，需要调整
             # 将吸引子拉近到安全距离
             safe_distance = min(measured_distance * 0.8, attractor_distance)
-            if safe_distance > 0.5:  # 至少保持0.5米距离
+            if safe_distance > 0.6:  # 至少保持0.6米距离
                 attractor_pos['distance'] = safe_distance
                 attractor_pos['x'] = safe_distance * math.cos(attractor_angle)
                 attractor_pos['y'] = safe_distance * math.sin(attractor_angle)
@@ -248,7 +248,7 @@ class PotentialFieldPlanner(Node):
             attractor_msg = Point()
             attractor_msg.x = float('inf')  # 使用无穷大表示无效位置
             attractor_msg.y = float('inf')
-            attractor_msg.z = 0.0
+            attractor_msg.z = float('inf')
             self.attractor_pos_pub.publish(attractor_msg)
             
             intent_msg = String()
@@ -274,11 +274,14 @@ class PotentialFieldPlanner(Node):
         # 3. 更新当前吸引子位置
         self.current_attractor_pos = attractor_pos
         
-        # 发布吸引子位置给Unity可视化
+        # 发布吸引子位置给Unity可视化（提前进行坐标系转换）
         attractor_msg = Point()
-        attractor_msg.x = float(attractor_pos['x'])
-        attractor_msg.y = float(attractor_pos['y'])
-        attractor_msg.z = 0.0  # 2D平面，z=0
+        # ROS坐标系 -> Unity坐标系转换
+        # ROS: X=前, Y=左 -> Unity: X=右, Y=高度, Z=前
+        unity_scale_factor = 5  # Unity端会有一个0.2的scale因子 因此这里乘5以保证Attractor的pos是正确的
+        attractor_msg.x = float(attractor_pos['y'] * unity_scale_factor)  # ROS_Y -> Unity_X
+        attractor_msg.y = 0.1 * unity_scale_factor  # Unity高度固定
+        attractor_msg.z = float(attractor_pos['x'] * unity_scale_factor)  # ROS_X -> Unity_Z
         self.attractor_pos_pub.publish(attractor_msg)
         
         # 4. 计算吸引力（指向动态吸引子）
