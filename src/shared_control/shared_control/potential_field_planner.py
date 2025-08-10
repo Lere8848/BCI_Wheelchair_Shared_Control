@@ -22,6 +22,8 @@ class PotentialFieldPlanner(Node):
         self.path_pub = self.create_publisher(Twist, '/auto_cmd_vel', 10)
         # 发布轮椅意图给Unity端
         self.wheelchair_intent_pub = self.create_publisher(String, '/wheelchair_intent', 10)
+        # 发布吸引子位置给Unity端可视化
+        self.attractor_pos_pub = self.create_publisher(Point, '/attractor_pos', 10) # 别用ros2的point 不然和Unity还得兼容半天 明早看看这里 把Attractor可视化做出来 然后做剩下的调试
 
         # ====== 势场参数配置 =====
         self.obstacle_influence = 0.5  # 障碍物影响范围(m) - 超过此距离的障碍物不产生排斥力
@@ -44,8 +46,8 @@ class PotentialFieldPlanner(Node):
         self.sub_sectors_per_major = 6  # 每个60°大扇区分为6个10°小扇区
         
         # 动态吸引子参数
-        self.min_attractor_distance = 0.5  # 最小吸引子距离(m) - 高频输入时的吸引子位置
-        self.max_attractor_distance = 1.0  # 最大吸引子距离(m) - 低频输入时的吸引子位置
+        self.min_attractor_distance = 0.9  # 最小吸引子距离(m) - 高频输入时的吸引子位置
+        self.max_attractor_distance = 1.8  # 最大吸引子距离(m) - 低频输入时的吸引子位置
         self.current_attractor_pos = None   # 当前吸引子位置 - 存储最新计算的吸引子坐标
         
         # 来自路径评估节点的状态
@@ -97,52 +99,64 @@ class PotentialFieldPlanner(Node):
     def find_optimal_attractor_position(self, ranges, angle_min, angle_increment):
         """
         基于用户意图和path_eval结果，找到最优吸引子位置
-        使用简化逻辑，依赖path_eval提供的路径可行性分析
+        在用户偏好大扇区内分小扇区，选择openness最高的小扇区放置吸引子
         """
         # 获取用户偏好方向的角度范围
         user_sector_start, user_sector_end = self.major_sectors[self.user_direction]
         
-        # 在用户偏好扇区内寻找开放区域
-        best_angle = (user_sector_start + user_sector_end) / 2  # 默认选择扇区中心
-        best_distance = float('inf')
+        # 如果用户偏好方向被path_eval判定为不可行，返回None表示无法放置
+        if not self.multipath_status[self.user_direction]:
+            self.get_logger().warn(f'User preferred direction not available, staying stationary')
+            return None
         
-        # 扫描用户偏好扇区，寻找最开放的方向
-        for i, dist in enumerate(ranges):
-            if not math.isfinite(dist):
+        # 在用户偏好大扇区内分解为小扇区，寻找openness最高的小扇区
+        sector_width = (user_sector_end - user_sector_start) / self.sub_sectors_per_major
+        best_openness = 0.0
+        best_angle = (user_sector_start + user_sector_end) / 2  # 默认选择扇区中心
+        best_distance = 0.0
+        
+        # 分析每个小扇区的openness
+        for i in range(self.sub_sectors_per_major):
+            sub_start = user_sector_start + i * sector_width
+            sub_end = user_sector_start + (i + 1) * sector_width
+            sub_center = (sub_start + sub_end) / 2
+            
+            # 计算该小扇区的openness
+            distances_in_subsector = []
+            for j, dist in enumerate(ranges):
+                if not math.isfinite(dist):
+                    continue
+                angle = angle_min + j * angle_increment
+                if sub_start <= angle <= sub_end:
+                    distances_in_subsector.append(dist)
+            
+            if len(distances_in_subsector) == 0:
                 continue
                 
-            angle = angle_min + i * angle_increment
+            # 计算小扇区openness
+            distances = np.array(distances_in_subsector)
+            avg_distance = np.mean(distances)
+            min_distance = np.min(distances)
             
-            # 检查是否在用户偏好扇区内
-            if user_sector_start <= angle <= user_sector_end:
-                if dist > best_distance:
-                    best_distance = dist
-                    best_angle = angle
-        
-        # 如果用户偏好方向被path_eval判定为不可行，寻找备选方案
-        if not self.multipath_status[self.user_direction]:
-            self.get_logger().warn(f'User preferred direction not available according to path_eval, searching alternatives')
+            # 基础openness：基于平均距离
+            base_openness = min(1.0, avg_distance / 3.0)
             
-            # 按优先级寻找可行方向：前 > 左/右
-            alternative_directions = [1, 0, 2] if self.user_direction != 1 else [0, 2]
+            # 安全性惩罚：如果最小距离太小，大幅降低openness
+            if min_distance < 0.8:
+                safety_penalty = 0.8
+            elif min_distance < 1.5:
+                safety_penalty = 0.5
+            else:
+                safety_penalty = 0.0
             
-            for alt_dir in alternative_directions:
-                if self.multipath_status[alt_dir]:
-                    # 使用备选方向
-                    alt_start, alt_end = self.major_sectors[alt_dir]
-                    best_angle = (alt_start + alt_end) / 2
-                    
-                    # 在备选扇区内寻找最开放的点
-                    for i, dist in enumerate(ranges):
-                        if not math.isfinite(dist):
-                            continue
-                        angle = angle_min + i * angle_increment
-                        if alt_start <= angle <= alt_end and dist > best_distance:
-                            best_distance = dist
-                            best_angle = angle
-                    
-                    self.get_logger().info(f'Using alternative direction: {["left", "forward", "right"][alt_dir]}')
-                    break
+            final_openness = base_openness * (1.0 - safety_penalty)
+            final_openness = max(0.0, min(1.0, final_openness))
+            
+            # 选择openness最高的小扇区
+            if final_openness > best_openness:
+                best_openness = final_openness
+                best_angle = sub_center
+                best_distance = avg_distance
         
         # 计算吸引子距离（基于用户输入频率）
         input_frequency = len(self.user_input_history)
@@ -156,21 +170,21 @@ class PotentialFieldPlanner(Node):
             attractor_distance = self.max_attractor_distance - ratio * (self.max_attractor_distance - self.min_attractor_distance)
         
         # 确保吸引子距离不超过该方向的最大可见距离
-        if math.isfinite(best_distance):
+        if best_distance > 0:
             attractor_distance = min(attractor_distance, best_distance * 0.8)
         
         # 计算吸引子位置
         attractor_x = attractor_distance * math.cos(best_angle)
         attractor_y = attractor_distance * math.sin(best_angle)
 
-        self.get_logger().debug(f'Attractor position: Angle={math.degrees(best_angle):.1f}°, Distance={attractor_distance:.2f}m')
+        self.get_logger().debug(f'Attractor position: Angle={math.degrees(best_angle):.1f}°, Distance={attractor_distance:.2f}m, Openness={best_openness:.2f}')
 
         return {
             'x': attractor_x,
             'y': attractor_y,
             'angle': best_angle,
             'distance': attractor_distance,
-            'openness': min(1.0, best_distance / 3.0) if math.isfinite(best_distance) else 0.0,
+            'openness': best_openness,
             'major_direction': self.user_direction
         }
 
@@ -223,6 +237,25 @@ class PotentialFieldPlanner(Node):
         # 1. 基于用户意图和path_eval结果找到最优吸引子位置
         attractor_pos = self.find_optimal_attractor_position(ranges, angle_min, angle_increment)
         
+        # 如果用户偏好方向不可行，保持静止并等待新指令
+        if attractor_pos is None:
+            cmd = Twist()
+            cmd.linear.x = 0.0
+            cmd.angular.z = 0.0
+            self.path_pub.publish(cmd)
+            
+            # 发布无效吸引子位置（隐藏可视化）
+            attractor_msg = Point()
+            attractor_msg.x = float('inf')  # 使用无穷大表示无效位置
+            attractor_msg.y = float('inf')
+            attractor_msg.z = 0.0
+            self.attractor_pos_pub.publish(attractor_msg)
+            
+            intent_msg = String()
+            intent_msg.data = f"STOP: User preferred direction ({['Left', 'Forward', 'Right'][self.user_direction]}) not available, waiting for new command"
+            self.wheelchair_intent_pub.publish(intent_msg)
+            return
+        
         # 2. 检查吸引子位置的可见性和安全性
         attractor_valid = self.check_attractor_visibility(attractor_pos, ranges, angle_min, angle_increment)
         
@@ -240,6 +273,13 @@ class PotentialFieldPlanner(Node):
         
         # 3. 更新当前吸引子位置
         self.current_attractor_pos = attractor_pos
+        
+        # 发布吸引子位置给Unity可视化
+        attractor_msg = Point()
+        attractor_msg.x = float(attractor_pos['x'])
+        attractor_msg.y = float(attractor_pos['y'])
+        attractor_msg.z = 0.0  # 2D平面，z=0
+        self.attractor_pos_pub.publish(attractor_msg)
         
         # 4. 计算吸引力（指向动态吸引子）
         att_force_x = self.attractive_coef * attractor_pos['x']
