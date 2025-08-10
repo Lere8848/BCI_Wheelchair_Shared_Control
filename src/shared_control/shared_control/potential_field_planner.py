@@ -26,8 +26,8 @@ class PotentialFieldPlanner(Node):
         self.attractor_pos_pub = self.create_publisher(Point, '/attractor_pos', 10) # 别用ros2的point 不然和Unity还得兼容半天 明早看看这里 把Attractor可视化做出来 然后做剩下的调试
 
         # ====== 势场参数配置 =====
-        self.obstacle_influence = 0.5  # 障碍物影响范围(m) - 超过此距离的障碍物不产生排斥力
-        self.repulsive_coef = 0.4  # 排斥力系数 - 控制障碍物排斥力的强度
+        self.obstacle_influence = 0.4  # 障碍物影响范围(m) - 超过此距离的障碍物不产生排斥力
+        self.repulsive_coef = 0.3  # 排斥力系数 - 控制障碍物排斥力的强度
         self.attractive_coef = 0.5  # 吸引力系数 - 控制用户意图吸引力的强度
         
         # 用户意图相关参数
@@ -174,8 +174,8 @@ class PotentialFieldPlanner(Node):
             attractor_distance = min(attractor_distance, best_distance * 0.8)
         
         # 计算吸引子位置
-        attractor_x = attractor_distance * math.cos(best_angle)
-        attractor_y = attractor_distance * math.sin(best_angle)
+        attractor_x = attractor_distance * math.cos(best_angle) + 0.38  # 激光雷达X偏移修正（此处还没传给unity 不用*5的缩放因子来防止Unity的0.2缩放 下同）
+        attractor_y = attractor_distance * math.sin(best_angle) + 0.38  # 激光雷达Y偏移修正
 
         # self.get_logger().debug(f'Attractor position: Angle={math.degrees(best_angle):.1f}°, Distance={attractor_distance:.2f}m, Openness={best_openness:.2f}, Input_freq={input_frequency}, Laser_range={best_distance:.2f}m}')
 

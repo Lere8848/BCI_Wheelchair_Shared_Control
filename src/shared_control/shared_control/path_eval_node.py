@@ -123,9 +123,9 @@ class PathEvalNode(Node):
         base_openness = min(1.0, avg_distance / 3.0)
         
         # 安全性惩罚：如果最小距离太小，大幅降低开放度
-        if min_distance < 0.8:
+        if min_distance < 0.7:
             safety_penalty = 0.8  # 大幅降低
-        elif min_distance < 1.5:
+        elif min_distance < 1.3:
             safety_penalty = 0.5  # 中等降低
         else:
             safety_penalty = 0.0  # 无惩罚
