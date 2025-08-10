@@ -22,8 +22,11 @@ class PotentialFieldPlanner(Node):
         self.path_pub = self.create_publisher(Twist, '/auto_cmd_vel', 10)
         # 发布轮椅意图给Unity端
         self.wheelchair_intent_pub = self.create_publisher(String, '/wheelchair_intent', 10)
-        # 发布吸引子位置给Unity端可视化
-        self.attractor_pos_pub = self.create_publisher(Point, '/attractor_pos', 10) # 别用ros2的point 不然和Unity还得兼容半天 明早看看这里 把Attractor可视化做出来 然后做剩下的调试
+        # 发布吸引子位置给Unity端可视化 - 三个方向的吸引子
+        self.attractor_pos_pub = self.create_publisher(Point, '/user_attractor_pos', 10) # 用户选择的吸引子位置
+        self.left_attractor_pub = self.create_publisher(Point, '/left_attractor_pos', 10)    # 左方向吸引子位置
+        self.forward_attractor_pub = self.create_publisher(Point, '/forward_attractor_pos', 10) # 前方向吸引子位置
+        self.right_attractor_pub = self.create_publisher(Point, '/right_attractor_pos', 10)   # 右方向吸引子位置
 
         # ====== 势场参数配置 =====
         self.obstacle_influence = 0.4  # 障碍物影响范围(m) - 超过此距离的障碍物不产生排斥力
@@ -49,6 +52,11 @@ class PotentialFieldPlanner(Node):
         self.min_attractor_distance = 0.9  # 最小吸引子距离(m) - 高频输入时的吸引子位置
         self.max_attractor_distance = 1.8  # 最大吸引子距离(m) - 低频输入时的吸引子位置
         self.current_attractor_pos = None   # 当前吸引子位置 - 存储最新计算的吸引子坐标
+        
+        # 激光雷达相对于轮椅中心的偏移参数（Unity坐标系和ros2坐标系的转换）
+        self.lidar_offset_x = 0.464   # Unity Z轴 -> ROS X轴 (前向偏移)
+        self.lidar_offset_y = 0       # Unity X轴 -> ROS Y轴 (左向偏移)  
+        self.lidar_rotation_offset = math.radians(-25)  # Y轴旋转偏移(弧度) - Unity的-25度转为弧度
         
         # 来自路径评估节点的状态
         self.path_blocked = False
@@ -94,71 +102,14 @@ class PotentialFieldPlanner(Node):
             if self.multipath_detected:
                 self.get_logger().debug(f'Multipath detected: L={self.multipath_status[0]}, F={self.multipath_status[1]}, R={self.multipath_status[2]}')
     
-
-
-    def find_optimal_attractor_position(self, ranges, angle_min, angle_increment):
+    def find_optimal_attractor_positions_all_directions(self, ranges, angle_min, angle_increment):
         """
-        基于用户意图和path_eval结果，找到最优吸引子位置
-        在用户偏好大扇区内分小扇区，选择openness最高的小扇区放置吸引子
+        计算三个方向的最优吸引子位置
+        返回包含三个方向吸引子信息的字典
         """
-        # 获取用户偏好方向的角度范围
-        user_sector_start, user_sector_end = self.major_sectors[self.user_direction]
+        all_attractors = {}
         
-        # 如果用户偏好方向被path_eval判定为不可行，返回None表示无法放置
-        if not self.multipath_status[self.user_direction]:
-            self.get_logger().warn(f'User preferred direction not available, staying stationary')
-            return None
-        
-        # 在用户偏好大扇区内分解为小扇区，寻找openness最高的小扇区
-        sector_width = (user_sector_end - user_sector_start) / self.sub_sectors_per_major
-        best_openness = 0.0
-        best_angle = (user_sector_start + user_sector_end) / 2  # 默认选择扇区中心
-        best_distance = 0.0
-        
-        # 分析每个小扇区的openness
-        for i in range(self.sub_sectors_per_major):
-            sub_start = user_sector_start + i * sector_width
-            sub_end = user_sector_start + (i + 1) * sector_width
-            sub_center = (sub_start + sub_end) / 2
-            
-            # 计算该小扇区的openness
-            distances_in_subsector = []
-            for j, dist in enumerate(ranges):
-                if not math.isfinite(dist):
-                    continue
-                angle = angle_min + j * angle_increment
-                if sub_start <= angle <= sub_end:
-                    distances_in_subsector.append(dist)
-            
-            if len(distances_in_subsector) == 0:
-                continue
-                
-            # 计算小扇区openness
-            distances = np.array(distances_in_subsector)
-            avg_distance = np.mean(distances)
-            min_distance = np.min(distances)
-            
-            # 基础openness：基于平均距离
-            base_openness = min(1.0, avg_distance / 3.0)
-            
-            # 安全性惩罚：如果最小距离太小，大幅降低openness
-            if min_distance < 0.8:
-                safety_penalty = 0.8
-            elif min_distance < 1.5:
-                safety_penalty = 0.5
-            else:
-                safety_penalty = 0.0
-            
-            final_openness = base_openness * (1.0 - safety_penalty)
-            final_openness = max(0.0, min(1.0, final_openness))
-            
-            # 选择openness最高的小扇区
-            if final_openness > best_openness:
-                best_openness = final_openness
-                best_angle = sub_center
-                best_distance = avg_distance
-        
-        # 计算吸引子距离（基于用户输入频率）
+        # 计算用户输入频率（用于所有方向的距离计算）
         input_frequency = len(self.user_input_history)
         if input_frequency <= 2:
             attractor_distance = self.min_attractor_distance  # 低频输入，近距离
@@ -169,24 +120,156 @@ class PotentialFieldPlanner(Node):
             ratio = (input_frequency - 2) / (8 - 2)
             attractor_distance = self.min_attractor_distance + ratio * (self.max_attractor_distance - self.min_attractor_distance)
         
-        # 确保吸引子距离不超过该方向的最大可见距离
-        if best_distance > 0:
-            attractor_distance = min(attractor_distance, best_distance * 0.8)
+        # 对三个大方向分别计算最优吸引子位置
+        for direction in [0, 1, 2]:  # 0=左, 1=前, 2=右
+            # 获取该方向的角度范围
+            sector_start, sector_end = self.major_sectors[direction]
+            
+            # 检查该方向是否可行
+            if not self.multipath_status[direction]:
+                all_attractors[direction] = None
+                continue
+            
+            # 在该大扇区内分解为小扇区，寻找openness最高的小扇区
+            sector_width = (sector_end - sector_start) / self.sub_sectors_per_major
+            best_openness = 0.0
+            best_angle = (sector_start + sector_end) / 2  # 默认选择扇区中心
+            best_distance = 0.0
+            
+            # 分析每个小扇区的openness
+            for i in range(self.sub_sectors_per_major):
+                sub_start = sector_start + i * sector_width
+                sub_end = sector_start + (i + 1) * sector_width
+                sub_center = (sub_start + sub_end) / 2
+                
+                # 计算该小扇区的openness
+                distances_in_subsector = []
+                for j, dist in enumerate(ranges):
+                    if not math.isfinite(dist):
+                        continue
+                    angle = angle_min + j * angle_increment
+                    if sub_start <= angle <= sub_end:
+                        distances_in_subsector.append(dist)
+                
+                if len(distances_in_subsector) == 0:
+                    continue
+                    
+                # 计算小扇区openness
+                distances = np.array(distances_in_subsector)
+                avg_distance = np.mean(distances)
+                min_distance = np.min(distances)
+                
+                # 基础openness：基于平均距离
+                base_openness = min(1.0, avg_distance / 3.0)
+                
+                # 安全性惩罚：如果最小距离太小，大幅降低openness
+                if min_distance < 0.8:
+                    safety_penalty = 0.8
+                elif min_distance < 1.5:
+                    safety_penalty = 0.5
+                else:
+                    safety_penalty = 0.0
+                
+                final_openness = base_openness * (1.0 - safety_penalty)
+                final_openness = max(0.0, min(1.0, final_openness))
+                
+                # 选择openness最高的小扇区
+                if final_openness > best_openness:
+                    best_openness = final_openness
+                    best_angle = sub_center
+                    best_distance = avg_distance
+            
+            # 确保吸引子距离不超过该方向的最大可见距离
+            final_attractor_distance = attractor_distance
+            if best_distance > 0:
+                final_attractor_distance = min(attractor_distance, best_distance * 0.8)
+            
+            # 计算吸引子在激光雷达坐标系中的位置
+            lidar_x = final_attractor_distance * math.cos(best_angle)
+            lidar_y = final_attractor_distance * math.sin(best_angle)
+            
+            # 转换到轮椅中心坐标系
+            wheelchair_x, wheelchair_y = self.transform_lidar_to_wheelchair_center(lidar_x, lidar_y)
+
+            all_attractors[direction] = {
+                'x': wheelchair_x,  # 轮椅中心坐标系的X坐标
+                'y': wheelchair_y,  # 轮椅中心坐标系的Y坐标
+                'angle': best_angle,
+                'distance': final_attractor_distance,
+                'openness': best_openness,
+                'major_direction': direction
+            }
         
-        # 计算吸引子位置
-        attractor_x = attractor_distance * math.cos(best_angle) + 0.38  # 激光雷达X偏移修正（此处还没传给unity 不用*5的缩放因子来防止Unity的0.2缩放 下同）
-        attractor_y = attractor_distance * math.sin(best_angle) + 0.38  # 激光雷达Y偏移修正
+        return all_attractors
 
-        # self.get_logger().debug(f'Attractor position: Angle={math.degrees(best_angle):.1f}°, Distance={attractor_distance:.2f}m, Openness={best_openness:.2f}, Input_freq={input_frequency}, Laser_range={best_distance:.2f}m}')
+    def transform_lidar_to_wheelchair_center(self, lidar_x, lidar_y):
+        """
+        将激光雷达坐标系的位置转换为轮椅中心坐标系的位置
+        考虑激光雷达的位置偏移和旋转偏移
+        
+        Args:
+            lidar_x, lidar_y: 在激光雷达坐标系中的位置
+        Returns:
+            wheelchair_x, wheelchair_y: 在轮椅中心坐标系中的位置
+        """
+        # 1. 应用旋转变换（补偿激光雷达的旋转偏移）
+        cos_rot = math.cos(-self.lidar_rotation_offset)  # 使用负角度进行反向旋转
+        sin_rot = math.sin(-self.lidar_rotation_offset)
+        
+        # 旋转矩阵变换
+        rotated_x = lidar_x * cos_rot - lidar_y * sin_rot
+        rotated_y = lidar_x * sin_rot + lidar_y * cos_rot
+        
+        # 2. 应用位置偏移（将激光雷达坐标原点移动到轮椅中心）
+        wheelchair_x = rotated_x + self.lidar_offset_x
+        wheelchair_y = rotated_y + self.lidar_offset_y
+        
+        return wheelchair_x, wheelchair_y
 
-        return {
-            'x': attractor_x,
-            'y': attractor_y,
-            'angle': best_angle,
-            'distance': attractor_distance,
-            'openness': best_openness,
-            'major_direction': self.user_direction
-        }
+    def publish_all_attractor_positions(self, all_attractors):
+        """
+        发布三个方向的吸引子位置给Unity端
+        """
+        unity_scale_factor = 5  # Unity端会有一个0.2的scale因子 因此这里乘5以保证Attractor的pos是正确的
+        
+        # 发布左方向吸引子
+        left_msg = Point()
+        if all_attractors[0] is not None:
+            left_msg.x = float((all_attractors[0]['y'] )* unity_scale_factor)  # ROS_Y -> Unity_X
+            left_msg.y = 0.1 * unity_scale_factor  # Unity高度固定
+            left_msg.z = float((all_attractors[0]['x'] ) * unity_scale_factor)  # ROS_X -> Unity_Z
+        else:
+            # 无效位置
+            left_msg.x = float('inf')
+            left_msg.y = float('inf')
+            left_msg.z = float('inf')
+        self.left_attractor_pub.publish(left_msg)
+        
+        # 发布前方向吸引子
+        forward_msg = Point()
+        if all_attractors[1] is not None:
+            forward_msg.x = float((all_attractors[1]['y'] ) * unity_scale_factor)  # ROS_Y -> Unity_X
+            forward_msg.y = 0.1 * unity_scale_factor  # Unity高度固定
+            forward_msg.z = float((all_attractors[1]['x'] ) * unity_scale_factor)  # ROS_X -> Unity_Z
+        else:
+            # 无效位置
+            forward_msg.x = float('inf')
+            forward_msg.y = float('inf')
+            forward_msg.z = float('inf')
+        self.forward_attractor_pub.publish(forward_msg)
+        
+        # 发布右方向吸引子
+        right_msg = Point()
+        if all_attractors[2] is not None:
+            right_msg.x = float((all_attractors[2]['y'] ) * unity_scale_factor)  # ROS_Y -> Unity_X
+            right_msg.y = 0.1 * unity_scale_factor  # Unity高度固定
+            right_msg.z = float((all_attractors[2]['x'] ) * unity_scale_factor)  # ROS_X -> Unity_Z
+        else:
+            # 无效位置
+            right_msg.x = float('inf')
+            right_msg.y = float('inf')
+            right_msg.z = float('inf')
+        self.right_attractor_pub.publish(right_msg)
 
     def check_attractor_visibility(self, attractor_pos, ranges, angle_min, angle_increment):
         """
@@ -210,8 +293,12 @@ class PotentialFieldPlanner(Node):
             safe_distance = min(measured_distance * 0.8, attractor_distance)
             if safe_distance > 0.6:  # 至少保持0.6米距离
                 attractor_pos['distance'] = safe_distance
-                attractor_pos['x'] = safe_distance * math.cos(attractor_angle)
-                attractor_pos['y'] = safe_distance * math.sin(attractor_angle)
+                # 重新计算调整后的位置（考虑坐标系转换）
+                lidar_x = safe_distance * math.cos(attractor_angle)
+                lidar_y = safe_distance * math.sin(attractor_angle)
+                wheelchair_x, wheelchair_y = self.transform_lidar_to_wheelchair_center(lidar_x, lidar_y)
+                attractor_pos['x'] = wheelchair_x
+                attractor_pos['y'] = wheelchair_y
                 self.get_logger().debug(f'Attractor position blocked by obstacle, adjusted distance to {safe_distance:.2f}m')
                 return True
             else:
@@ -234,8 +321,14 @@ class PotentialFieldPlanner(Node):
         angle_min = self.laser_data.angle_min
         angle_increment = self.laser_data.angle_increment
 
-        # 1. 基于用户意图和path_eval结果找到最优吸引子位置
-        attractor_pos = self.find_optimal_attractor_position(ranges, angle_min, angle_increment)
+        # 1. 计算三个方向的最优吸引子位置
+        all_attractors = self.find_optimal_attractor_positions_all_directions(ranges, angle_min, angle_increment)
+        
+        # 2. 发布所有三个方向的吸引子位置给Unity
+        self.publish_all_attractor_positions(all_attractors)
+        
+        # 3. 获取用户选择方向的吸引子位置用于执行
+        attractor_pos = all_attractors[self.user_direction]
         
         # 如果用户偏好方向不可行，保持静止并等待新指令
         if attractor_pos is None:
@@ -256,7 +349,7 @@ class PotentialFieldPlanner(Node):
             self.wheelchair_intent_pub.publish(intent_msg)
             return
         
-        # 2. 检查吸引子位置的可见性和安全性
+        # 2. 检查用户选择方向吸引子位置的可见性和安全性
         attractor_valid = self.check_attractor_visibility(attractor_pos, ranges, angle_min, angle_increment)
         
         if not attractor_valid:
@@ -271,10 +364,10 @@ class PotentialFieldPlanner(Node):
             self.wheelchair_intent_pub.publish(intent_msg)
             return
         
-        # 3. 更新当前吸引子位置
+        # 3. 更新当前吸引子位置（用户选择的方向）
         self.current_attractor_pos = attractor_pos
         
-        # 发布吸引子位置给Unity可视化（提前进行坐标系转换）
+        # 发布用户选择的吸引子位置给Unity可视化（提前进行坐标系转换）
         attractor_msg = Point()
         # ROS坐标系 -> Unity坐标系转换
         # ROS: X=前, Y=左 -> Unity: X=右, Y=高度, Z=前
