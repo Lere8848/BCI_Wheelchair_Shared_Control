@@ -1,3 +1,4 @@
+# with potential field, wheelchair semi auto control.
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
@@ -21,8 +22,8 @@ def generate_launch_description():
         # 融合节点
         Node(
             package='shared_control',
-            executable='static',
-            name='static_shared_control_fusion_node',
+            executable='control_fusion_node',
+            name='control_fusion_node',
         ),
 
         # 用户输入节点
@@ -37,12 +38,5 @@ def generate_launch_description():
             package='shared_control',
             executable='path_eval_node',
             name='path_eval_node'
-        ),
-
-        # 无输入监视节点
-        Node(
-            package='shared_control',
-            executable='no_input_monitor',
-            name='no_input_monitor_node'
         )
     ])

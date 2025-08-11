@@ -209,7 +209,7 @@ class PathEvalNode(Node):
         for i, dist in enumerate(all_dists):
             if not math.isfinite(dist):
                 continue
-            # 计算角度（简化计算，假设360度扫描）
+            # 计算角度（简化计算，180度扫描）
             angle = (i / len(all_dists)) * 2 * math.pi - math.pi
             
             # 只有在前方较小范围内（±20度）且距离非常近（0.4m）才触发危险

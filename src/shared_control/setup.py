@@ -19,19 +19,22 @@ setup(
     zip_safe=True,
     maintainer='Yukai Wang',
     maintainer_email='caroyalqi@gmail.com',
-    description='TODO: Package description',
+    description='a shared control package for BCI wheelchair',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'ros_tcp_server = ros_tcp_endpoint.default_server_endpoint:main',  # entry point for the ros_tcp_endpoint server
-            'user_input_node = shared_control.user_input_node:main',  # entry point for the user input node
-            'path_eval_node = shared_control.path_eval_node:main',  # entry point for the path evaluation node
-            'manual = shared_control.manual_control:main',  # entry point for the manual control node
-            'demo = shared_control.simple_shared_control_demo:main', # entry point for the shared control node
-            'static = shared_control.static_shared_control_fusion_node:main',  # entry point for the fusion node
-            'no_input_monitor = shared_control.no_input_monitor_node:main',  # entry point for the no input monitor node
-            'potential_field_planner = shared_control.potential_field_planner:main',  # entry point for the potential field planner node
+            # ROS TCP Endpoint
+            'ros_tcp_server = ros_tcp_endpoint.default_server_endpoint:main',
+            # Input Nodes
+            'user_input_node = shared_control.user_input_node:main',
+            'bci_input_node = shared_control.bci_input_node:main',
+            # Shared Control Nodes
+            'path_eval_node = shared_control.path_eval_node:main',
+            'potential_field_planner = shared_control.potential_field_planner:main',
+            'control_fusion_node = shared_control.control_fusion_node:main',
+            # For Test only
+            'manual_control = shared_control.manual_control_node:main',
         ],
     },
 )
