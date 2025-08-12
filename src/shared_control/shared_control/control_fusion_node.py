@@ -4,7 +4,15 @@ from rclpy.node import Node
 from std_msgs.msg import Int8, Int8MultiArray, Bool
 from geometry_msgs.msg import Twist
 import time
+import threading
 from rclpy.duration import Duration
+
+# LSL导入
+try:
+    from pylsl import StreamInfo, StreamOutlet
+    LSL_AVAILABLE = True
+except ImportError:
+    LSL_AVAILABLE = False
 
 class FusionNode(Node):
     def __init__(self):
@@ -13,6 +21,9 @@ class FusionNode(Node):
 
         self.user_cmd_sub = self.create_subscription(Int8, '/user_cmd', self.user_cmd_callback, 10)
         self.path_opt_sub = self.create_subscription(Int8MultiArray, '/path_options', self.path_callback, 10)
+        
+        # 订阅Ground Truth输入
+        self.gt_input_sub = self.create_subscription(Int8, '/gt_input', self.gt_input_callback, 10)
         
         # 订阅势场算法的路径指令（按需生成）
         self.auto_cmd_sub = self.create_subscription(Twist, '/auto_cmd_vel', self.auto_cmd_callback, 10)
@@ -47,6 +58,24 @@ class FusionNode(Node):
         # 用户意图状态
         self.pending_user_direction = None  # 待执行的用户方向意图
         self.last_user_command_time = None
+        
+        # Ground Truth 状态控制
+        self.waiting_for_groundtruth = False  # 是否等待真实意图输入
+        self.groundtruth_received = False     # 是否已接收真实意图
+        
+        # LSL输出流设置 - 发送轮椅运动状态给BCI
+        self.lsl_outlet = None
+        self.wheelchair_moving = False  # 轮椅运动状态跟踪
+        if LSL_AVAILABLE:
+            try:
+                # 创建LSL流：2个通道 [Moving_Flag, Stop_Flag]
+                info = StreamInfo('Wheelchair_Motion', 'Motion_Flag', 2, 10, 'float32', 'control_fusion_node')
+                self.lsl_outlet = StreamOutlet(info)
+                self.get_logger().info('LSL outlet created for wheelchair motion status transmission to BCI')
+            except Exception as e:
+                self.get_logger().warn(f'Failed to create LSL outlet: {str(e)}')
+        else:
+            self.get_logger().warn('LSL not available - wheelchair motion status will not be sent to BCI')
         
         self.timer = self.create_timer(0.1, self.timer_callback)
 
@@ -83,6 +112,31 @@ class FusionNode(Node):
         """更新路径阻塞状态"""
         self.path_blocked = msg.data
 
+    def gt_input_callback(self, msg):
+        """Ground Truth输入回调"""
+        if self.waiting_for_groundtruth:
+            direction_names = ["Left", "Forward", "Right"]
+            self.get_logger().info(f'Ground truth received: {direction_names[msg.data]}')
+            self.groundtruth_received = True
+            self.waiting_for_groundtruth = False
+
+    def send_motion_status(self, is_moving):
+        """发送轮椅运动状态到BCI系统"""
+        if self.lsl_outlet and LSL_AVAILABLE:
+            try:
+                # [Moving_Flag, Stop_Flag] - 1表示状态激活，0表示状态未激活
+                moving_flag = 1.0 if is_moving else 0.0
+                stop_flag = 0.0 if is_moving else 1.0
+                motion_status = [moving_flag, stop_flag]
+                self.lsl_outlet.push_sample(motion_status)
+                
+                # 仅在状态变化时记录日志
+                if self.wheelchair_moving != is_moving:
+                    self.get_logger().info(f'Wheelchair motion status sent to BCI: Moving={is_moving}')
+                    self.wheelchair_moving = is_moving
+            except Exception as e:
+                self.get_logger().warn(f'Failed to send motion status via LSL: {str(e)}')
+
     def timer_callback(self):
         """主控制循环 - 用户触发的势场执行"""
         current_time = self.get_clock().now()
@@ -94,20 +148,28 @@ class FusionNode(Node):
             self.pending_user_direction = None
             stop_cmd = Twist()
             self.cmd_pub.publish(stop_cmd)
+            self.send_motion_status(False)  # 发送紧急停止状态
             return
         
         # 状态机逻辑
         if self.state == "IDLE":
             # 空闲状态：轮椅静止，等待用户触发
             if self.pending_user_direction is not None:
-                # 有待执行的用户意图，检查是否可以执行
-                direction = self.pending_user_direction
+                # 检查是否等待ground truth
+                if self.waiting_for_groundtruth:
+                    # 等待ground truth输入，保持静止
+                    stop_cmd = Twist()
+                    self.cmd_pub.publish(stop_cmd)
+                    self.send_motion_status(False)
+                    return
                 
-                # 检查用户选择的方向是否可行
+                # Ground truth已接收或不需要等待，检查路径可行性
+                direction = self.pending_user_direction
                 if self.path_options[direction] == 1:
                     self.get_logger().info(f'Starting execution for user direction: {["Left", "Forward", "Right"][direction]}')
                     self.state = "EXECUTING"
                     self.execution_start_time = current_time
+                    self.send_motion_status(True)  # 发送运动开始状态
                     # 清除待执行意图
                     self.pending_user_direction = None
                 else:
@@ -116,10 +178,12 @@ class FusionNode(Node):
                     self.pending_user_direction = None
                     stop_cmd = Twist()
                     self.cmd_pub.publish(stop_cmd)
+                    self.send_motion_status(False)  # 发送停止状态
             else:
                 # 没有待执行意图，保持静止
                 stop_cmd = Twist()
                 self.cmd_pub.publish(stop_cmd)
+                self.send_motion_status(False)  # 发送停止状态
         
         elif self.state == "EXECUTING":
             # 执行状态：按照势场算法执行用户选择的方向
@@ -133,6 +197,7 @@ class FusionNode(Node):
                     self.execution_start_time = None
                     stop_cmd = Twist()
                     self.cmd_pub.publish(stop_cmd)
+                    self.send_motion_status(False)  # 发送停止状态
                     return
             
             # 继续执行势场算法的输出
@@ -146,6 +211,7 @@ class FusionNode(Node):
                 self.execution_start_time = None
                 stop_cmd = Twist()
                 self.cmd_pub.publish(stop_cmd)
+                self.send_motion_status(False)  # 发送停止状态
     
     def user_cmd_callback(self, msg):
         """用户命令回调 - 触发势场算法执行用户选择的方向"""
@@ -158,17 +224,19 @@ class FusionNode(Node):
         direction_names = ["Left", "Forward", "Right"]
         self.get_logger().info(f'User command received: {direction_names[direction]}')
         
-        # 设置待执行的用户意图
-        self.pending_user_direction = direction
-        self.last_user_command_time = self.get_clock().now()
-        
         # 如果当前正在执行，终止当前执行并准备新的执行
         if self.state == "EXECUTING":
             self.get_logger().info('Interrupting current execution for new user command')
             self.state = "IDLE"
             self.execution_start_time = None
-            
-        # 状态将在下一个timer_callback中处理新的用户意图
+            self.send_motion_status(False)  # 发送停止状态
+        
+        # 等待Ground Truth输入
+        self.get_logger().info('Waiting for ground truth input...')
+        self.waiting_for_groundtruth = True
+        self.groundtruth_received = False
+        self.pending_user_direction = direction
+        self.last_user_command_time = self.get_clock().now()
 
 
 def main(args=None):

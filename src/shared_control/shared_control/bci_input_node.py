@@ -2,7 +2,7 @@
 # 必须要BCI那边先送数据 这边再开节点才能收到 时间关系 现不深究 后面有时间看看怎么优化
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Int8, Float64MultiArray
+from std_msgs.msg import Int8, Float32MultiArray
 import numpy as np
 import time
 import threading
@@ -20,7 +20,7 @@ class BCIInputNode(Node):
         
         # 发布器设置
         self.user_cmd_pub = self.create_publisher(Int8, '/user_cmd', 10)  # 与原user_input_node兼容
-        self.bci_info_pub = self.create_publisher(Float64MultiArray, '/bci_info', 10)  # 新增：发布BCI信息给Unity
+        self.bci_info_pub = self.create_publisher(Float32MultiArray, '/bci_info', 10)  # 新增：发布BCI信息给Unity
         
         # BCI数据状态
         self.latest_action = 1      # gt字段：实际去的方向 (0=左, 1=前, 2=右)
@@ -112,14 +112,16 @@ class BCIInputNode(Node):
     def timer_callback(self):
         """定时发布BCI信息给Unity端"""
         # 创建包含BCI状态信息的消息
-        bci_info_msg = Float64MultiArray()
+        # 发送数据格式: [conf_left, conf_forward, conf_right, gt, valid, connected, threshold]
+        bci_info_msg = Float32MultiArray()
         bci_info_msg.data = [
             self.latest_confidences[0],     # 左方向置信度
             self.latest_confidences[1],     # 前方向置信度
             self.latest_confidences[2],     # 右方向置信度
             float(self.latest_action),      # gt：实际选择的方向
             float(self.latest_valid),       # valid：是否执行
-            1.0 if self.lsl_connected else 0.0  # 连接状态
+            1.0 if self.lsl_connected else 0.0,  # 连接状态
+            1.0 # 置信度判断threshold 先占位 看后面要不要
         ]
         self.bci_info_pub.publish(bci_info_msg)
 

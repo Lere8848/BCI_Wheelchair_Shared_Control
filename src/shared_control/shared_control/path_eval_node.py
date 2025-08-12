@@ -13,6 +13,13 @@ from std_msgs.msg import Int8MultiArray, Bool
 import numpy as np
 import math
 
+# LSL库导入 - 用于发送路径信息给BCI
+try:
+    from pylsl import StreamInfo, StreamOutlet
+    LSL_AVAILABLE = True
+except ImportError:
+    LSL_AVAILABLE = False
+
 class PathEvalNode(Node):
     def __init__(self):
         super().__init__('path_eval_node')
@@ -40,6 +47,19 @@ class PathEvalNode(Node):
         self.path_width_threshold = 1.0 # 路径宽度阈值(m)
         self.wall_detection_distance = 0.5 # 墙壁检测距离(m)
         self.min_obstacle_dist = 0.5 # 最小障碍物距离(m)
+
+        # LSL输出流设置 - 发送路径信息给BCI
+        self.lsl_outlet = None
+        if LSL_AVAILABLE:
+            try:
+                # 创建LSL流：3个通道 [Left, Forward, Right]
+                info = StreamInfo('Path_Info', 'Path_Info', 3, 5, 'float32', 'path_eval_node')
+                self.lsl_outlet = StreamOutlet(info)
+                self.get_logger().info('LSL outlet created for path info transmission to BCI')
+            except Exception as e:
+                self.get_logger().warn(f'Failed to create LSL outlet: {str(e)}')
+        else:
+            self.get_logger().warn('LSL not available - path info will not be sent to BCI')
 
         self.timer = self.create_timer(0.2, self.timer_callback)  # 提高频率
         self.get_logger().info('PathEvalNode initialized - Processing LIDAR data from Unity simulation environment')
@@ -228,6 +248,14 @@ class PathEvalNode(Node):
         multipath_msg = Int8MultiArray()
         multipath_msg.data = path  # 现在与path_options一致
         self.multipath_pub.publish(multipath_msg)
+
+        # 发送路径信息到BCI系统 [Left, Forward, Right]
+        if self.lsl_outlet and LSL_AVAILABLE:
+            try:
+                path_info = [float(path[0]), float(path[1]), float(path[2])]
+                self.lsl_outlet.push_sample(path_info)
+            except Exception as e:
+                self.get_logger().warn(f'Failed to send path info via LSL: {str(e)}')
 
         # 发布路径阻塞状态
         blocked_msg = Bool()

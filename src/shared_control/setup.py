@@ -29,6 +29,7 @@ setup(
             # Input Nodes
             'user_input_node = shared_control.user_input_node:main',
             'bci_input_node = shared_control.bci_input_node:main',
+            'groundtruth_input_node = shared_control.groundtruth_input_node:main',
             # Shared Control Nodes
             'path_eval_node = shared_control.path_eval_node:main',
             'potential_field_planner = shared_control.potential_field_planner:main',
