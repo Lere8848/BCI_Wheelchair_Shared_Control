@@ -12,28 +12,28 @@ def generate_launch_description():
             parameters=[{'ROS_IP': '127.0.0.1'}]
         ),
 
-        # 势场法路径规划节点
+        # Potential field path planning node
         Node(
             package='shared_control',
             executable='potential_field_planner',
             name='potential_field_planner'
         ),
 
-        # 融合节点
+        # Fusion node
         Node(
             package='shared_control',
             executable='control_fusion_node',
             name='control_fusion_node',
         ),
 
-        # 用户输入节点
+        # User input node
         Node(
             package='shared_control',
             executable='user_input_node',
             name='user_input_node'
         ),
 
-        # 路径评估节点
+        # Path evaluation node
         Node(
             package='shared_control',
             executable='path_eval_node',

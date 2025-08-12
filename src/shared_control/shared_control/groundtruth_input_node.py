@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Ground Truth Input Node - 读取用户键盘输入并传输真实意图给BCI系统
-键盘映射: W=前进(1), A=左转(0), D=右转(2)
+Ground Truth Input Node - read user keyboard input and transmit true intent to BCI system
+keyboard mapping: W=forward(1), A=left turn(0), D=right turn(2)
 """
 
 import rclpy
@@ -10,7 +10,7 @@ from std_msgs.msg import Int8
 import sys
 import platform
 
-# LSL导入
+# LSL imports
 try:
     from pylsl import StreamInfo, StreamOutlet
     LSL_AVAILABLE = True
@@ -31,11 +31,11 @@ class GroundTruthInputNode(Node):
         # ROS2 publisher
         self.pub = self.create_publisher(Int8, '/gt_input', 10)
         
-        # LSL输出流设置 - 发送用户真实意图给BCI
+        # LSL output stream setup - send user true intent to BCI
         self.lsl_outlet = None
         if LSL_AVAILABLE:
             try:
-                # 创建LSL流：1个通道发送真实意图 [0=Left, 1=Forward, 2=Right]
+                # Create LSL stream: 1 channel to send true intent [0=Left, 1=Forward, 2=Right]
                 info = StreamInfo('GroundTruth_Intent', 'Intent', 1, 0, 'float32', 'groundtruth_input_node')
                 self.lsl_outlet = StreamOutlet(info)
                 self.get_logger().info('LSL outlet created for ground truth intent transmission to BCI')
@@ -62,7 +62,7 @@ class GroundTruthInputNode(Node):
             return key
 
     def send_groundtruth_intent(self, intent):
-        """发送用户真实意图到BCI系统"""
+        """send user true intent to BCI system"""
         if self.lsl_outlet and LSL_AVAILABLE:
             try:
                 intent_data = [float(intent)]

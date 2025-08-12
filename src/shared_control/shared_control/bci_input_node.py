@@ -1,5 +1,6 @@
 # bci_input_node.py
-# 必须要BCI那边先送数据 这边再开节点才能收到 时间关系 现不深究 后面有时间看看怎么优化
+# Note: BCI side must send data first before this node can receive it. Due to time constraints, 
+# this will not be investigated further. Will optimize this later when time permits.
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Int8, Float32MultiArray
@@ -7,7 +8,7 @@ import numpy as np
 import time
 import threading
 
-# LSL库导入 - 用于接收BCI数据
+# LSL library import - for receiving BCI data
 try:
     from pylsl import StreamInlet, resolve_streams
     LSL_AVAILABLE = True
@@ -18,72 +19,72 @@ class BCIInputNode(Node):
     def __init__(self):
         super().__init__('bci_input_node')
         
-        # 发布器设置
-        self.user_cmd_pub = self.create_publisher(Int8, '/user_cmd', 10)  # 与原user_input_node兼容
-        self.bci_info_pub = self.create_publisher(Float32MultiArray, '/bci_info', 10)  # 新增：发布BCI信息给Unity
+        # Publisher setup
+        self.user_cmd_pub = self.create_publisher(Int8, '/user_cmd', 10)  # Compatible with original user_input_node
+        self.bci_info_pub = self.create_publisher(Float32MultiArray, '/bci_info', 10)  # New: publish BCI info to Unity
         
-        # BCI数据状态
-        self.latest_action = 1      # gt字段：实际去的方向 (0=左, 1=前, 2=右)
-        self.latest_confidences = [0.0, 0.0, 0.0]  # 三个方向的置信度 [左, 前, 右]
-        self.latest_valid = 0       # valid字段：指令是否执行 (1=执行, 0=不执行)
+        # BCI data status
+        self.latest_action = 1      # gt field: actual direction to go (0=left, 1=forward, 2=right)
+        self.latest_confidences = [0.0, 0.0, 0.0]  # Confidences for three directions [left, forward, right]
+        self.latest_valid = 0       # valid field: whether command should be executed (1=execute, 0=no execute)
         
-        # LSL数据流相关
+        # LSL data stream related
         self.inlet = None
         self.lsl_connected = False
         
-        # 定时器 - 定期发布BCI信息给Unity
+        # Timer - periodically publish BCI info to Unity
         self.timer = self.create_timer(0.1, self.timer_callback)
         
-        # 启动LSL接收线程
+        # Start LSL receiver thread
         if LSL_AVAILABLE:
             self.lsl_thread = threading.Thread(target=self.lsl_receiver_thread, daemon=True)
             self.lsl_thread.start()
             self.get_logger().info('BCI Input Node initialized with LSL support')
         else:
             self.get_logger().warn('LSL library not available - BCI node cannot function without LSL')
-            # 在没有LSL的情况下，发布默认数据以保持系统运行
-            self.latest_action = 1  # 默认前进
-            self.latest_confidences = [0.0, 0.0, 0.0]  # 零置信度
-            self.latest_valid = 0  # 不执行
+            # In case LSL is not available, publish default data to keep system running
+            self.latest_action = 1  # Default forward
+            self.latest_confidences = [0.0, 0.0, 0.0]  # Zero confidence
+            self.latest_valid = 0  # No execution
 
     def lsl_receiver_thread(self):
-        """LSL数据接收线程"""
+        """LSL data receiver thread"""
         try:
-            # 查找BCI数据流
+            # Look for BCI data stream
             self.get_logger().info('Looking for BCI data stream...')
             streams = resolve_streams()
             
-            # 过滤出BCI_Commands类型的流
-            bci_streams = [s for s in streams if s.type() == 'BCI_Commands'] # 与Yuze对接
+            # Filter streams with BCI_Commands type
+            bci_streams = [s for s in streams if s.type() == 'BCI_Commands'] # Interface with Yuze
             
             if not bci_streams:
                 self.get_logger().warn('No BCI data stream found, waiting for stream...')
-                # 等待并重试
+                # Wait and retry
                 time.sleep(2.0)
                 return
             
-            # 连接到第一个找到的流
+            # Connect to the first found stream
             self.inlet = StreamInlet(bci_streams[0])
             self.lsl_connected = True
             self.get_logger().info('Connected to BCI data stream')
             
-            # 持续接收数据
+            # Continuously receive data
             while rclpy.ok() and self.lsl_connected:
                 try:
-                    # 接收数据格式: dict{0:conf, 1:conf, 2:conf, gt:0/1/2, valid:1/0}
+                    # Receive data format: dict{0:conf, 1:conf, 2:conf, gt:0/1/2, valid:1/0}
                     sample, timestamp = self.inlet.pull_sample(timeout=1.0)
                     
                     if sample is not None and len(sample) >= 5:
-                        # 解析字典格式数据
+                        # Parse dictionary format data
                         self.latest_confidences = [
-                            float(sample[0]),  # 左方向置信度
-                            float(sample[1]),  # 前方向置信度  
-                            float(sample[2])   # 右方向置信度
+                            float(sample[0]),  # Left direction confidence
+                            float(sample[1]),  # Forward direction confidence  
+                            float(sample[2])   # Right direction confidence
                         ]
-                        self.latest_action = int(sample[3])    # gt字段：实际方向
-                        self.latest_valid = int(sample[4])     # valid字段：是否执行
+                        self.latest_action = int(sample[3])    # gt field: actual direction
+                        self.latest_valid = int(sample[4])     # valid field: whether to execute
                         
-                        # 如果valid为1，发布用户指令
+                        # If valid is 1, publish user command
                         if self.latest_valid == 1:
                             self.publish_user_command()
                             
@@ -96,7 +97,7 @@ class BCIInputNode(Node):
             self.lsl_connected = False
 
     def publish_user_command(self):
-        """发布用户指令到ROS系统"""
+        """Publish user command to ROS system"""
         if self.latest_action in [0, 1, 2]:
             msg = Int8()
             msg.data = self.latest_action
@@ -110,18 +111,18 @@ class BCIInputNode(Node):
             )
 
     def timer_callback(self):
-        """定时发布BCI信息给Unity端"""
-        # 创建包含BCI状态信息的消息
-        # 发送数据格式: [conf_left, conf_forward, conf_right, gt, valid, connected, threshold]
+        """Periodically publish BCI info to Unity"""
+        # Create message containing BCI status information
+        # Send data format: [conf_left, conf_forward, conf_right, gt, valid, connected, threshold]
         bci_info_msg = Float32MultiArray()
         bci_info_msg.data = [
-            self.latest_confidences[0],     # 左方向置信度
-            self.latest_confidences[1],     # 前方向置信度
-            self.latest_confidences[2],     # 右方向置信度
-            float(self.latest_action),      # gt：实际选择的方向
-            float(self.latest_valid),       # valid：是否执行
-            1.0 if self.lsl_connected else 0.0,  # 连接状态
-            1.0 # 置信度判断threshold 先占位 看后面要不要
+            self.latest_confidences[0],     # Left direction confidence
+            self.latest_confidences[1],     # Forward direction confidence
+            self.latest_confidences[2],     # Right direction confidence
+            float(self.latest_action),      # gt: actual selected direction
+            float(self.latest_valid),       # valid: whether to execute
+            1.0 if self.lsl_connected else 0.0,  # Connection status
+            1.0 # Confidence judgment threshold - placeholder for now, may be needed later
         ]
         self.bci_info_pub.publish(bci_info_msg)
 

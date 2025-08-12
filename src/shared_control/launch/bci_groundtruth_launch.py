@@ -5,7 +5,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     return LaunchDescription([
-        # 地面真实意图输入节点
+        # Ground truth intent input node
         Node(
             package='shared_control',
             executable='groundtruth_input_node',
@@ -14,7 +14,7 @@ def generate_launch_description():
             emulate_tty=True
         ),
         
-        # BCI输入节点
+        # BCI input node
         Node(
             package='shared_control',
             executable='bci_input_node',
@@ -22,7 +22,7 @@ def generate_launch_description():
             output='screen'
         ),
         
-        # 路径评估节点
+        # Path evaluation node
         Node(
             package='shared_control',
             executable='path_eval_node',
@@ -30,7 +30,7 @@ def generate_launch_description():
             output='screen'
         ),
         
-        # 势场规划器节点
+        # Potential field planner node
         Node(
             package='shared_control',
             executable='potential_field_planner',
@@ -38,7 +38,7 @@ def generate_launch_description():
             output='screen'
         ),
         
-        # 控制融合节点（带ground truth等待）
+        # Control fusion node (with ground truth waiting)
         Node(
             package='shared_control',
             executable='control_fusion_node',
