@@ -1,0 +1,16 @@
+# Essential Python packages for ROS2 BCI Wheelchair Shared Control
+# Install with: pip install -r requirements-minimal.txt
+
+# Core dependencies
+numpy>=1.21.0
+pylsl>=1.13.0
+
+# Development/Testing (optional)
+pytest>=6.0.0
+setuptools>=40.0.0
+colcon-common-extensions>=0.3.0
+
+# ROS2 ament tools (if not installed with ROS2)
+ament-flake8>=0.12.0
+ament-copyright>=0.12.0  
+ament-pep257>=0.12.0
