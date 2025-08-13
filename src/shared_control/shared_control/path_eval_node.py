@@ -79,9 +79,9 @@ class PathEvalNode(Node):
         """
         # define three main sectors: Unity coordinate system consistent with potential_field_planner
         major_sectors = {
-            'left': (-math.pi/2, -math.pi/6),    # leftsector：-90°到-30°
-            'front': (-math.pi/6, math.pi/6),    # forwardsector：-30°到30°
-            'right': (math.pi/6, math.pi/2)      # rightsector：30°到90°
+            'left': (-math.pi/2, -math.pi/6),    # leftsector：-90° to -30°
+            'front': (-math.pi/6, math.pi/6),    # forwardsector：-30° to 30°
+            'right': (math.pi/6, math.pi/2)      # rightsector：30° to 90°
         }
         
         sub_sectors_per_major = 6  # each main sector divided into 6 sub-sectors
@@ -247,10 +247,13 @@ class PathEvalNode(Node):
         multipath_msg.data = path  # now consistent with path_options
         self.multipath_pub.publish(multipath_msg)
 
-        # send path information to BCI system [Left, Forward, Right]
+        # map path information to BCI system format
+        bci_path = [path[0], path[2], path[1]]  # [Left, Right, Forward]
+
+        # send path information to BCI system [Left, Right, Forward]
         if self.lsl_outlet and LSL_AVAILABLE:
             try:
-                path_info = [float(path[0]), float(path[1]), float(path[2])]
+                path_info = [float(bci_path[0]), float(bci_path[1]), float(bci_path[2])]
                 self.lsl_outlet.push_sample(path_info)
             except Exception as e:
                 self.get_logger().warn(f'Failed to send path info via LSL: {str(e)}')
@@ -266,7 +269,7 @@ class PathEvalNode(Node):
         self.danger_pub.publish(danger_msg)
 
         # log output
-        self.get_logger().info(f'/path_options: {path} | /multipath: {path} | /path_blocked: {path_blocked} ({block_reason}) | /danger_stop: {danger}')
+        self.get_logger().info(f'/path_options: {bci_path} | /multipath: {bci_path} | /path_blocked: {path_blocked} ({block_reason}) | /danger_stop: {danger}')
         
 def main(args=None):
     rclpy.init(args=args)

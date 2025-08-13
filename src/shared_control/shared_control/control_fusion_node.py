@@ -164,7 +164,7 @@ class FusionNode(Node):
                 # Ground truth received or no need to wait, check path feasibility
                 direction = self.pending_user_direction
                 if self.path_options[direction] == 1:
-                    self.get_logger().info(f'Starting execution for user direction: {["Left", "Forward", "Right"][direction]}')
+                    self.get_logger().info(f'Starting execution for user direction: {["Left", "Right", "Forward"][direction]}')
                     self.state = "EXECUTING"
                     self.execution_start_time = current_time
                     self.send_motion_status(True)  # Send moving status
@@ -172,7 +172,7 @@ class FusionNode(Node):
                     self.pending_user_direction = None
                 else:
                     # user selected direction is blocked
-                    self.get_logger().warn(f'User selected direction {["Left", "Forward", "Right"][direction]} is blocked, staying idle')
+                    self.get_logger().warn(f'User selected direction {["Left", "Right", "Forward"][direction]} is blocked, staying idle')
                     self.pending_user_direction = None
                     stop_cmd = Twist()
                     self.cmd_pub.publish(stop_cmd)
@@ -214,13 +214,13 @@ class FusionNode(Node):
     
     def user_cmd_callback(self, msg):
         """user command callback - trigger potential field algorithm to execute user selected direction"""
-        direction = msg.data  # 0=left, 1=forward, 2=right
+        direction = msg.data  # 0=left, 1=right, 2=forward
 
         if direction < 0 or direction > 2:
             self.get_logger().warn(f'Invalid direction: {direction}')
             return
 
-        direction_names = ["Left", "Forward", "Right"]
+        direction_names = ["Left", "Right", "Forward"]
         self.get_logger().info(f'User command received: {direction_names[direction]}')
         
         # if currently executing, terminate current execution and prepare new execution

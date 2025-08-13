@@ -25,7 +25,7 @@ class BCIInputNode(Node):
         
         # BCI data status
         self.latest_action = 1      # gt field: actual direction to go (0=left, 1=forward, 2=right)
-        self.latest_confidences = [0.0, 0.0, 0.0]  # Confidences for three directions [left, forward, right]
+        self.latest_confidences = [0.0, 0.0, 0.0]  # Confidences for three directions [left, right, forward]  MODIFY HERE LATER
         self.latest_valid = 0       # valid field: whether command should be executed (1=execute, 0=no execute)
         
         # LSL data stream related
@@ -78,8 +78,8 @@ class BCIInputNode(Node):
                         # Parse dictionary format data
                         self.latest_confidences = [
                             float(sample[0]),  # Left direction confidence
-                            float(sample[1]),  # Forward direction confidence  
-                            float(sample[2])   # Right direction confidence
+                            float(sample[1]),  # Right direction confidence
+                            float(sample[2])   # Forward direction confidence
                         ]
                         self.latest_action = int(sample[3])    # gt field: actual direction
                         self.latest_valid = int(sample[4])     # valid field: whether to execute
@@ -103,7 +103,7 @@ class BCIInputNode(Node):
             msg.data = self.latest_action
             self.user_cmd_pub.publish(msg)
             
-            direction_names = ['LEFT', 'FORWARD', 'RIGHT']
+            direction_names = ['LEFT', 'RIGHT', 'FORWARD']
             selected_confidence = self.latest_confidences[self.latest_action]
             self.get_logger().info(
                 f'BCI Intent: {direction_names[self.latest_action]} '
@@ -113,12 +113,12 @@ class BCIInputNode(Node):
     def timer_callback(self):
         """Periodically publish BCI info to Unity"""
         # Create message containing BCI status information
-        # Send data format: [conf_left, conf_forward, conf_right, gt, valid, connected, threshold]
+        # Send data format: [conf_left, conf_right, conf_forward, gt, valid, connected, threshold]
         bci_info_msg = Float32MultiArray()
         bci_info_msg.data = [
             self.latest_confidences[0],     # Left direction confidence
-            self.latest_confidences[1],     # Forward direction confidence
-            self.latest_confidences[2],     # Right direction confidence
+            self.latest_confidences[1],     # Right direction confidence
+            self.latest_confidences[2],     # Forward direction confidence
             float(self.latest_action),      # gt: actual selected direction
             float(self.latest_valid),       # valid: whether to execute
             1.0 if self.lsl_connected else 0.0,  # Connection status

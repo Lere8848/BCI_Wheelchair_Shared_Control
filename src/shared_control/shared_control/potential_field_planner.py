@@ -13,7 +13,7 @@ class PotentialFieldPlanner(Node):
         super().__init__('potential_field_planner')
         # Subscribe to laser scanner data
         self.laser_sub = self.create_subscription(LaserScan, '/scan', self.laser_callback, 10)
-        # Subscribe to user intent (0=left, 1=forward, 2=right)
+        # Subscribe to user intent (0=left, 1=right, 2=forward)
         self.user_dir_sub = self.create_subscription(Int8, '/user_cmd', self.user_dir_callback, 10)
         # Subscribe to path evaluation results
         self.path_blocked_sub = self.create_subscription(Bool, '/path_blocked', self.path_blocked_callback, 10)
@@ -34,7 +34,7 @@ class PotentialFieldPlanner(Node):
         self.attractive_coef = 0.5  # Attractive force coefficient - controls strength of user intent attractive force
         
         # User intent related parameters
-        self.user_direction = 1  # Current user direction intent: 0=left, 1=forward, 2=right
+        self.user_direction = 1  # Current user direction intent: 0=left, 1=forward, 2=right (internal mapping), default=forward
         self.user_input_history = []  # User input history - used to calculate input frequency
         self.max_history_time = 2.0  # Maximum history record time (seconds) - inputs older than this will be cleared
         
@@ -69,12 +69,31 @@ class PotentialFieldPlanner(Node):
         self.laser_data = None
         self.get_logger().info('Potential Field Planner Node Initialized')
 
+    def map_BCI_intent_to_internal(self, user_cmd):
+        """
+        Map BCI command format (LRF) to internal processing format (LFR)
+        """
+        if user_cmd == 0:  # left -> left
+            return 0
+        elif user_cmd == 1:  # right -> right
+            return 2
+        elif user_cmd == 2:  # forward -> forward
+            return 1
+        else:
+            return None  # invalid command
+
     def user_dir_callback(self, msg):
         """Receive user intent and record history"""
         if msg.data in [0, 1, 2]:
-            # Record user input history (timestamp + direction)
+            # Map user command to internal direction format
+            internal_direction = self.map_BCI_intent_to_internal(msg.data)
+            if internal_direction is None:
+                self.get_logger().warn(f'Invalid user direction mapping: {msg.data}')
+                return
+            
+            # Record user input history (timestamp + internal direction)
             current_time = self.get_clock().now()
-            self.user_input_history.append((current_time, msg.data))
+            self.user_input_history.append((current_time, internal_direction))
             
             # Clear history records older than 2 seconds
             cutoff_time = current_time - rclpy.duration.Duration(seconds=self.max_history_time)
@@ -83,8 +102,11 @@ class PotentialFieldPlanner(Node):
                 if t >= cutoff_time
             ]
             
-            self.user_direction = msg.data
-            self.get_logger().info(f'User intent: {["left", "forward", "right"][msg.data]}, Input count within 2s: {len(self.user_input_history)}')
+            self.user_direction = internal_direction
+            # Log with both user command and internal mapping
+            user_cmd_names = ["left", "right", "forward"]  # 0=left, 1=right, 2=forward
+            internal_names = ["left", "forward", "right"]  # 0=left, 1=forward, 2=right
+            self.get_logger().info(f'User intent: {user_cmd_names[msg.data]} (cmd:{msg.data}) -> {internal_names[internal_direction]} (internal:{internal_direction}), Input count within 2s: {len(self.user_input_history)}')
         else:
             self.get_logger().warn(f'Invalid user direction: {msg.data}')
     
