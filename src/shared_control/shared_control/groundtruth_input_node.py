@@ -35,7 +35,7 @@ class GroundTruthInputNode(Node):
         self.lsl_outlet = None
         if LSL_AVAILABLE:
             try:
-                # Create LSL stream: 1 channel to send true intent [0=Left, 1=Forward, 2=Right]
+                # Create LSL stream: 1 channel to send true intent [0=Left, 1=Right, 2=Forward]
                 info = StreamInfo('GroundTruth_Intent', 'Intent', 1, 0, 'float32', 'groundtruth_input_node')
                 self.lsl_outlet = StreamOutlet(info)
                 self.get_logger().info('LSL outlet created for ground truth intent transmission to BCI')
@@ -80,14 +80,14 @@ class GroundTruthInputNode(Node):
             self.send_groundtruth_intent(0)
             self.get_logger().info('Ground Truth: LEFT')
         elif key == 'w':
-            msg.data = 1  # forward
-            self.pub.publish(msg)
-            self.send_groundtruth_intent(1)
-            self.get_logger().info('Ground Truth: FORWARD')
-        elif key == 'd':
-            msg.data = 2  # right
+            msg.data = 2  # forward
             self.pub.publish(msg)
             self.send_groundtruth_intent(2)
+            self.get_logger().info('Ground Truth: FORWARD')
+        elif key == 'd':
+            msg.data = 1  # right
+            self.pub.publish(msg)
+            self.send_groundtruth_intent(1)
             self.get_logger().info('Ground Truth: RIGHT')
 
 

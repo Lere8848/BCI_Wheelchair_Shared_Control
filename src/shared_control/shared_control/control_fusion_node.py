@@ -68,7 +68,7 @@ class FusionNode(Node):
         self.wheelchair_moving = False  # wheelchair motion status tracking
         if LSL_AVAILABLE:
             try:
-                # Create LSL stream: 1 channel [Motion_Flag] - continuous transmission
+                # Create LSL stream: 1 channel [Motion_Flag 0/1]
                 info = StreamInfo('Wheelchair_Motion', 'Motion_Flag', 1, 10, 'float32', 'control_fusion_node')
                 self.lsl_outlet = StreamOutlet(info)
                 self.get_logger().info('LSL outlet created for wheelchair motion status transmission to BCI')
@@ -214,7 +214,7 @@ class FusionNode(Node):
     
     def user_cmd_callback(self, msg):
         """user command callback - trigger potential field algorithm to execute user selected direction"""
-        direction = msg.data  # 0=left, 1=right, 2=forward
+        direction = msg.data  # 0=left, 1=right, 2=forward  Int8 [0/1/2]
 
         if direction < 0 or direction > 2:
             self.get_logger().warn(f'Invalid direction: {direction}')
