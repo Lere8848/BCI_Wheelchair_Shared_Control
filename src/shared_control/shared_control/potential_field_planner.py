@@ -106,7 +106,7 @@ class PotentialFieldPlanner(Node):
             # Log with both user command and internal mapping
             user_cmd_names = ["left", "right", "forward"]  # 0=left, 1=right, 2=forward
             internal_names = ["left", "forward", "right"]  # 0=left, 1=forward, 2=right
-            self.get_logger().info(f'User intent: {user_cmd_names[msg.data]} (cmd:{msg.data}) -> {internal_names[internal_direction]} (internal:{internal_direction}), Input count within 2s: {len(self.user_input_history)}')
+            self.get_logger().info(f'User intent: {user_cmd_names[msg.data]}, Input count within 2s: {len(self.user_input_history)}')
         else:
             self.get_logger().warn(f'Invalid user direction: {msg.data}')
     
