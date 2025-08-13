@@ -68,8 +68,8 @@ class FusionNode(Node):
         self.wheelchair_moving = False  # wheelchair motion status tracking
         if LSL_AVAILABLE:
             try:
-                # Create LSL stream: 2 channels [Moving_Flag, Stop_Flag]
-                info = StreamInfo('Wheelchair_Motion', 'Motion_Flag', 2, 10, 'float32', 'control_fusion_node')
+                # Create LSL stream: 1 channel [Motion_Flag] - continuous transmission
+                info = StreamInfo('Wheelchair_Motion', 'Motion_Flag', 1, 10, 'float32', 'control_fusion_node')
                 self.lsl_outlet = StreamOutlet(info)
                 self.get_logger().info('LSL outlet created for wheelchair motion status transmission to BCI')
             except Exception as e:
@@ -124,15 +124,13 @@ class FusionNode(Node):
         """send wheelchair motion status to BCI system"""
         if self.lsl_outlet and LSL_AVAILABLE:
             try:
-                # [Moving_Flag, Stop_Flag] - 1 indicates active status, 0 indicates inactive status
-                moving_flag = 1.0 if is_moving else 0.0
-                stop_flag = 0.0 if is_moving else 1.0
-                motion_status = [moving_flag, stop_flag]
-                self.lsl_outlet.push_sample(motion_status)
+                # Single channel: 1.0 for moving, 0.0 for stopped
+                motion_flag = 1.0 if is_moving else 0.0
+                self.lsl_outlet.push_sample([motion_flag])
                 
-                # log only when status changes
+                # log only when status changes to avoid spam
                 if self.wheelchair_moving != is_moving:
-                    self.get_logger().info(f'Wheelchair motion status sent to BCI: Moving={is_moving}')
+                    self.get_logger().info(f'Wheelchair motion status changed: Moving={is_moving}')
                     self.wheelchair_moving = is_moving
             except Exception as e:
                 self.get_logger().warn(f'Failed to send motion status via LSL: {str(e)}')
@@ -148,7 +146,7 @@ class FusionNode(Node):
             self.pending_user_direction = None
             stop_cmd = Twist()
             self.cmd_pub.publish(stop_cmd)
-            self.send_motion_status(False)  # Send emergency stop status
+            self.send_motion_status(False)  # Send stop status
             return
         
         # state machine logic
@@ -160,7 +158,7 @@ class FusionNode(Node):
                     # Wait for ground truth input, keep idle
                     stop_cmd = Twist()
                     self.cmd_pub.publish(stop_cmd)
-                    self.send_motion_status(False)
+                    self.send_motion_status(False)  # Send stop status
                     return
                 
                 # Ground truth received or no need to wait, check path feasibility
@@ -169,7 +167,7 @@ class FusionNode(Node):
                     self.get_logger().info(f'Starting execution for user direction: {["Left", "Forward", "Right"][direction]}')
                     self.state = "EXECUTING"
                     self.execution_start_time = current_time
-                    self.send_motion_status(True)  # Send motion start status
+                    self.send_motion_status(True)  # Send moving status
                     # clear pending intent
                     self.pending_user_direction = None
                 else:
@@ -204,6 +202,7 @@ class FusionNode(Node):
             if not (self.auto_cmd.linear.x == 0.0 and self.auto_cmd.angular.z == 0.0):
                 self.get_logger().debug(f'Executing potential field command: linear={self.auto_cmd.linear.x:.2f}, angular={self.auto_cmd.angular.z:.2f}')
                 self.cmd_pub.publish(self.auto_cmd)
+                self.send_motion_status(True)  # Send moving status
             else:
                 # potential field algorithm output is zero, may have reached target or encountered obstacle, end execution
                 self.get_logger().info('Potential field output is zero, ending execution early')
