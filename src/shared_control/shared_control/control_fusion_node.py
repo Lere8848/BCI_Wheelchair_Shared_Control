@@ -60,7 +60,7 @@ class FusionNode(Node):
         if LSL_AVAILABLE:
             try:
                 # Create LSL stream: 1 channel [Motion_Flag 0/1]
-                info = StreamInfo('Wheelchair_Motion', 'Motion_Flag', 1, 10, 'float32', 'control_fusion_node')
+                info = StreamInfo('Wheelchair_Motion', 'Motion_Flag', 1, 0, 'float32', 'control_fusion_node')
                 self.lsl_outlet = StreamOutlet(info)
                 self.get_logger().info('LSL outlet created for wheelchair motion status transmission to BCI')
             except Exception as e:

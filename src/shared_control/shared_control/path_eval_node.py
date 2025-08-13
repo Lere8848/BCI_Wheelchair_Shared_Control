@@ -53,7 +53,7 @@ class PathEvalNode(Node):
         if LSL_AVAILABLE:
             try:
                 # Create LSL stream: 3 channels [Left, Forward, Right]
-                info = StreamInfo('Path_Info', 'Path_Info', 3, 5, 'float32', 'path_eval_node')
+                info = StreamInfo('Path_Info', 'Path_Info', 3, 0, 'float32', 'path_eval_node')
                 self.lsl_outlet = StreamOutlet(info)
                 self.get_logger().info('LSL outlet created for path info transmission to BCI')
             except Exception as e:
