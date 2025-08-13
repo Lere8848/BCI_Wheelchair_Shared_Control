@@ -96,8 +96,9 @@ class BCIInputNode(Node):
                         self.latest_valid = int(val_sample[1])     # if_valid
                         
                         # If valid is 1, publish user command
-                        if self.latest_valid == 1:
-                            self.publish_user_command()
+                        # if self.latest_valid == 1:
+                        # QAQ... I did the same thing as Yuze. Here just needed to execute the command, and BCI would directly determine whether to send it here.
+                        self.publish_user_command()
                             
                 except Exception as e:
                     self.get_logger().warn(f'LSL data reception error: {str(e)}')
