@@ -7,7 +7,7 @@ import platform
 
 if platform.system() == 'Windows':
     import msvcrt
-else:
+else: # Linux/Unix
     import termios
     import tty
     import select

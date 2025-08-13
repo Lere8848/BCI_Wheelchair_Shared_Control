@@ -17,7 +17,7 @@ class ManualControlNode(Node):
         self.pub = self.create_publisher(Twist, '/cmd_vel', 10)
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.get_logger().info('ManualControlNode initialized.')
-        self.get_logger().info('Press "w", "s", "a", "d" to control the robot. Press "q" to quit.')
+        self.get_logger().info('Press "w", "s", "a", "d" to control the robot.')
 
     def get_key(self):
         if platform.system() == 'Windows':

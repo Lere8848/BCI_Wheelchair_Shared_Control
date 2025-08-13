@@ -11,18 +11,18 @@ import rclpy.duration
 class PotentialFieldPlanner(Node):
     def __init__(self):
         super().__init__('potential_field_planner')
-        # Subscribe to laser scanner data
+        # Subscribe to Unity data
         self.laser_sub = self.create_subscription(LaserScan, '/scan', self.laser_callback, 10)
-        # Subscribe to user intent (0=left, 1=right, 2=forward)
-        self.user_dir_sub = self.create_subscription(Int8, '/user_cmd', self.user_dir_callback, 10)
-        # Subscribe to path evaluation results
+ 
+        self.user_dir_sub = self.create_subscription(Int8, '/user_cmd', self.user_dir_callback, 10) # user intent (0=left, 1=right, 2=forward)
+
         self.path_blocked_sub = self.create_subscription(Bool, '/path_blocked', self.path_blocked_callback, 10)
         self.multipath_sub = self.create_subscription(Int8MultiArray, '/multipath_detected', self.multipath_callback, 10)
-        # Publish calculated path commands
-        self.path_pub = self.create_publisher(Twist, '/auto_cmd_vel', 10)
-        # Publish wheelchair intent to Unity
-        self.wheelchair_intent_pub = self.create_publisher(String, '/wheelchair_intent', 10)
-        # Publish attractor positions to Unity for visualization - three direction attractors
+
+        self.path_pub = self.create_publisher(Twist, '/auto_cmd_vel', 10) # Publish calculated path commands
+        self.wheelchair_intent_pub = self.create_publisher(String, '/wheelchair_intent', 10) # to unity, Publish wheelchair intent
+
+        # to Unity for visualization - three direction attractors
         self.attractor_pos_pub = self.create_publisher(Point, '/user_attractor_pos', 10) # User selected attractor position
         self.left_attractor_pub = self.create_publisher(Point, '/left_attractor_pos', 10)    # Left direction attractor position
         self.forward_attractor_pub = self.create_publisher(Point, '/forward_attractor_pos', 10) # Forward direction attractor position
@@ -158,7 +158,7 @@ class PotentialFieldPlanner(Node):
             best_angle = (sector_start + sector_end) / 2  # default select sector center
             best_distance = 0.0
             
-            # analyze each sub-sector的openness
+            # analyze each sub-sector openness
             for i in range(self.sub_sectors_per_major):
                 sub_start = sector_start + i * sector_width
                 sub_end = sector_start + (i + 1) * sector_width
@@ -253,8 +253,8 @@ class PotentialFieldPlanner(Node):
         publish attractor positions for three directions to Unity
         """
         unity_scale_factor = 5  # Unity will have a 0.2 scale factor so multiply by 5 here to ensure Attractor position is correct
-        
-        # publishleftdirectionattractor
+
+        # publish left direction attractor
         left_msg = Point()
         if all_attractors[0] is not None:
             left_msg.x = float((all_attractors[0]['y'] )* unity_scale_factor)  # ROS_Y -> Unity_X
@@ -266,8 +266,8 @@ class PotentialFieldPlanner(Node):
             left_msg.y = float('inf')
             left_msg.z = float('inf')
         self.left_attractor_pub.publish(left_msg)
-        
-        # publishforwarddirectionattractor
+
+        # publish forward direction attractor
         forward_msg = Point()
         if all_attractors[1] is not None:
             forward_msg.x = float((all_attractors[1]['y'] ) * unity_scale_factor)  # ROS_Y -> Unity_X
@@ -279,8 +279,8 @@ class PotentialFieldPlanner(Node):
             forward_msg.y = float('inf')
             forward_msg.z = float('inf')
         self.forward_attractor_pub.publish(forward_msg)
-        
-        # publishrightdirectionattractor
+
+        # publish right direction attractor
         right_msg = Point()
         if all_attractors[2] is not None:
             right_msg.x = float((all_attractors[2]['y'] ) * unity_scale_factor)  # ROS_Y -> Unity_X
@@ -361,7 +361,7 @@ class PotentialFieldPlanner(Node):
             
             # publish invalid attractor position (hide visualization)
             attractor_msg = Point()
-            attractor_msg.x = float('inf')  # 使用无穷大表示invalid position
+            attractor_msg.x = float('inf')  # invalid position
             attractor_msg.y = float('inf')
             attractor_msg.z = float('inf')
             self.attractor_pos_pub.publish(attractor_msg)
@@ -391,9 +391,11 @@ class PotentialFieldPlanner(Node):
         
         # publish user selected attractor position to Unity visualization (coordinate system conversion in advance)
         attractor_msg = Point()
-        # ROS coordinate system -> Unity coordinate system conversion
-        # ROS: X=forward, Y=left -> Unity: X=右, Y=高度, Z=前
+
         unity_scale_factor = 5  # Unity will have a 0.2 scale factor so multiply by 5 here to ensure Attractor position is correct
+
+        # ROS coordinate system -> Unity coordinate system conversion
+        # ROS: X=forward, Y=left -> Unity: X=right, Y=height, Z=forward
         attractor_msg.x = float(attractor_pos['y'] * unity_scale_factor)  # ROS_Y -> Unity_X
         attractor_msg.y = 0.1 * unity_scale_factor  # Unity height fixed
         attractor_msg.z = float(attractor_pos['x'] * unity_scale_factor)  # ROS_X -> Unity_Z
@@ -451,8 +453,6 @@ class PotentialFieldPlanner(Node):
             wheelchair_intent = f"STOP: {stop_reason}"
         else:
             # convert potential field force to motion command
-            # X direction force controls forward velocity, Y direction force controls steering
-            
             # forward velocity: based on X direction force, limited within reasonable range
             cmd.linear.x = max(0.0, min(0.5, total_force_x))
             

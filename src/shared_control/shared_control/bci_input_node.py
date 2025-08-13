@@ -19,8 +19,7 @@ class BCIInputNode(Node):
     def __init__(self):
         super().__init__('bci_input_node')
         
-        # Publisher setup
-        self.user_cmd_pub = self.create_publisher(Int8, '/user_cmd', 10)  # Compatible with original user_input_node
+        self.user_cmd_pub = self.create_publisher(Int8, '/user_cmd', 10)  # use the original user_input_node topic
         self.bci_info_pub = self.create_publisher(Float32MultiArray, '/bci_info', 10)  # publish BCI info to Unity
         
         # BCI Confidence Data

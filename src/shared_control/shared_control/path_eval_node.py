@@ -37,18 +37,18 @@ class PathEvalNode(Node):
         self.lidar_ranges = []
         self.laser_data = None
         
-        # sliding window obstacle detection parameters
-        self.window_size = 5
-        self.min_consecutive_detections = 2
-        self.obstacle_detection_history = []
+        # # sliding window obstacle detection parameters
+        # self.window_size = 5
+        # self.min_consecutive_detections = 2
+        # self.obstacle_detection_history = []
         
-        # detectionparameters
-        self.path_detection_distance = 2.0 # pathdetectiondistance(m)
-        self.path_width_threshold = 1.0 # path width threshold (m)
-        self.wall_detection_distance = 0.5 # wall detection distance (m)
-        self.min_obstacle_dist = 0.5 # minimum obstacle distance (m)
+        # # detectionparameters
+        # self.path_detection_distance = 2.0 # pathdetectiondistance(m)
+        # self.path_width_threshold = 1.0 # path width threshold (m)
+        # self.wall_detection_distance = 0.5 # wall detection distance (m)
+        # self.min_obstacle_dist = 0.5 # minimum obstacle distance (m)
 
-        # LSL输出流设置 - send path information to BCI
+        # send path information to BCI
         self.lsl_outlet = None
         if LSL_AVAILABLE:
             try:
@@ -199,16 +199,16 @@ class PathEvalNode(Node):
         # use vector analysis results as path_options to ensure consistency
         path = [int(p) for p in paths_status]  # [left, forward, right] consistent with vector analysis results
         
-        # check forward obstacles (for sliding window validation)
-        immediate_front_blocked = False
-        for i, dist in enumerate(ranges):
-            if not math.isfinite(dist):
-                continue
-            angle = angle_min + i * angle_increment
-            # check if within forward ±17 degrees range
-            if abs(angle) < 0.3 and dist < self.min_obstacle_dist:
-                immediate_front_blocked = True
-                break
+        # # check forward obstacles (for sliding window validation)
+        # immediate_front_blocked = False
+        # for i, dist in enumerate(ranges):
+        #     if not math.isfinite(dist):
+        #         continue
+        #     angle = angle_min + i * angle_increment
+        #     # check if within forward ±17 degrees range
+        #     if abs(angle) < 0.3 and dist < self.min_obstacle_dist:
+        #         immediate_front_blocked = True
+        #         break
         
         # multipath detection logic
         multipath_detected = False
@@ -218,11 +218,10 @@ class PathEvalNode(Node):
         
         # comprehensive judgment on whether to block path - based on vector analysis results
         path_blocked = False
-        block_reason = ""
+        # block_reason = ""
 
         # danger detection - reduce sensitivity to avoid excessive interference
         all_dists = np.array(self.lidar_ranges)
-        # change to stricter conditions: 0.4m distance and must be within smaller angle range forward
         danger = False
         
         for i, dist in enumerate(all_dists):
@@ -247,10 +246,8 @@ class PathEvalNode(Node):
         multipath_msg.data = path  # now consistent with path_options
         self.multipath_pub.publish(multipath_msg)
 
-        # map path information to BCI system format
+        # map and send path information to BCI system format
         bci_path = [path[0], path[2], path[1]]  # [Left, Right, Forward]
-
-        # send path information to BCI system [Left, Right, Forward]
         if self.lsl_outlet and LSL_AVAILABLE:
             try:
                 path_info = [float(bci_path[0]), float(bci_path[1]), float(bci_path[2])]
@@ -269,7 +266,7 @@ class PathEvalNode(Node):
         self.danger_pub.publish(danger_msg)
 
         # log output
-        self.get_logger().info(f'/path_options: {bci_path} | /multipath: {bci_path} | /path_blocked: {path_blocked} ({block_reason}) | /danger_stop: {danger}')
+        self.get_logger().info(f'/path_options: {bci_path} | /multipath: {bci_path} | /path_blocked: {path_blocked} | /danger_stop: {danger}')
         
 def main(args=None):
     rclpy.init(args=args)
