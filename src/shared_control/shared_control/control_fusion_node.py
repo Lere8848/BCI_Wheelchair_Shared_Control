@@ -222,9 +222,10 @@ class FusionNode(Node):
             self.send_motion_status(False)  # Send stop status
         
         # Wait for Ground Truth input
-        self.get_logger().info('Waiting for ground truth input...')
-        self.waiting_for_groundtruth = True
-        self.groundtruth_received = False
+        # self.get_logger().info('Waiting for ground truth input...')
+        # NO NEED to wait for user gt input on my side, all decided by validation streams (action, *if_valid*) from Yuze .
+        self.waiting_for_groundtruth = False
+        self.groundtruth_received = True
         self.pending_user_direction = direction
         self.last_user_command_time = self.get_clock().now()
 
