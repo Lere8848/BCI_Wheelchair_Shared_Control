@@ -1,22 +1,116 @@
-继续阅读shared control的文献 搞清楚 PSC 找到具体的baseline、具体要解决的问题（就是 我引入了errP之后，我要用什么方法去实现共享控制） 然后确定下evaluation的metrics
+# BCI Wheelchair Shared Control System
 
-# TODO
+This repository contains a ROS2-based shared control system for BCI (Brain-Computer Interface) controlled wheelchairs, integrating potential field path planning.
 
-- [x] 注意平台兼容性 当前 `src\shared_control\shared_control\simple_shared_control.py` 里面只支持了linux的键位 *(已解决 现支持lin+win)*
-- [ ]
+## Prerequisites
 
-https://github.com/Unity-Technologies/Unity-Robotics-Hub/blob/main/tutorials/ros_unity_integration/setup.md 安装教程
-https://github.com/Unity-Technologies/Unity-Robotics-Hub/blob/main/tutorials/ros_unity_integration/README.md 总教程
+### Required Software
+- **ROS2 Humble** (recommended)
+- **Python 3.8+**
+- **Conda/Miniconda** for environment management
+- **Unity 6000.0.40f1** (for simulation environment)
 
-1 Unity
-    通过url git 安装了ROS TCP Connector这个package
-    在顶部Robotics菜单的ROS settings中 设置同2中设定的ip和port gate
+### Required Python Packages
+```bash
+pylsl  # Lab Streaming Layer for BCI communication
+numpy
+```
 
+## Installation and Setup
 
-2 ROS2
-    构建新的Workspace 在D:programming下
-    clone并构建了ROS-TCP-Endpoint包（ros2 branch）
-    两个都在本机 设置了127.0.0.1的ip 默认gate 10000
-    
-    往后每次启动，build+setup 然后run：
+### 1. Environment Setup
+
+(**For ROS2 installation in Windows**, RoboStack is reccomended, please refer to: [RoboStack Getting Started Guide](https://robostack.github.io/GettingStarted.html))
+
+After ROS2 installation, activate your Conda environment:
+```bash
+conda activate ros_env
+```
+
+Install required packages:
+```bash
+pip install pylsl numpy
+```
+### 2. Unity-ROS2 Connection Setup
+
+This system uses the **ROS-TCP-Endpoint** package for Unity-ROS2 communication:
+- ROS2 Package: [ROS-TCP-Endpoint (main-ros2 branch)](https://github.com/Unity-Technologies/ROS-TCP-Endpoint/tree/main-ros2)
+- Detailed Connection Tutorial: [Unity-ROS Integration Setup Guide](https://github.com/Unity-Technologies/Unity-Robotics-Hub/blob/main/tutorials/ros_unity_integration/setup.md)
+
+<!-- **Unity Simulator Repository**: https://github.com/Lere8848/BCI_Wheelchair_Simulator -->
+
+If you want to connect directly to Unity without using the launch file:
+
+```bash
+# Start ROS-TCP-Endpoint for Unity communication
 ros2 run ros_tcp_endpoint default_server_endpoint --ros-args -p ROS_IP:=127.0.0.1
+```
+
+**Unity Configuration:**
+1. Install the ROS TCP Connector package in Unity via `Package Manager`
+2. Navigate to **Robotics > ROS Settings** in Unity menu
+3. Set ROS IP to `127.0.0.1` and Port to `10000`
+
+
+### 3. ROS2 Workspace Setup
+
+Clone this repository to your ROS2 workspace and build the package:
+```bash
+# Build the shared_control package
+colcon build --packages-select shared_control 
+
+# Setup the environment (Windows)
+call install/setup.bat
+
+# Setup the environment (Linux/Mac)
+source install/setup.bash
+```
+
+## Usage
+
+### Launch the Complete System
+
+Activate the environment and launch all nodes:
+```bash
+# Activate conda environment
+conda activate ros_env
+
+# Setup ROS2 environment
+call install/setup.bat  # Windows
+# source install/setup.bash  # Linux/Mac
+
+# Launch the integrated BCI system
+ros2 launch shared_control bci_integration_launch.py
+```
+
+### Launch Individual Nodes (Alternative)
+
+For debugging or custom configurations, you can launch nodes individually:
+```bash
+# Set environment variable for immediate log output
+set PYTHONUNBUFFERED=1  # Windows
+# export PYTHONUNBUFFERED=1  # Linux/Mac
+
+# Launch individual nodes in separate terminals
+ros2 run shared_control bci_input_node
+ros2 run shared_control potential_field_planner  
+ros2 run shared_control path_eval_node
+ros2 run shared_control control_fusion_node
+```
+
+## System Architecture
+
+### Core Nodes:
+The system consists of four main nodes:
+
+1. **bci_input_node**: Receives BCI signals via LSL (Lab Streaming Layer)
+2. **path_eval_node**: Processes LIDAR data for path evaluation and obstacle detection
+3. **potential_field_planner**: Generates motion commands using potential field algorithms
+4. **control_fusion_node**: Fuses user intent with autonomous navigation for shared control
+
+### Key Topics:
+- `/user_cmd`: User intent commands (Int8)
+- `/cmd_vel`: Final velocity commands (Twist)
+- `/scan`: LIDAR sensor data (LaserScan)
+- `/path_options`: Available path directions (Int8MultiArray)
+- `/bci_info`: BCI confidence information (Float32MultiArray)
