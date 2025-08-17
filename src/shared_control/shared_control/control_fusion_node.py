@@ -15,7 +15,7 @@ except ImportError:
     LSL_AVAILABLE = False
 
 class FusionNode(Node):
-    def __init__(self):
+    def __init__(self, user_authority=0.8):
         super().__init__('fusion_node')
         self.cmd_pub = self.create_publisher(Twist, '/cmd_vel', 10)
 
@@ -47,7 +47,7 @@ class FusionNode(Node):
         self.execution_duration = 3.0  # execution duration per time (seconds)
         
         # Shared control authority parameters
-        self.user_authority = 1.0  # User authority weight
+        self.user_authority = user_authority  # User authority weight (configurable via command line)
         self.auto_authority = 1.0 - self.user_authority  # Potential Field weight
         
         # user intent status
@@ -258,8 +258,41 @@ class FusionNode(Node):
 
 
 def main(args=None):
+    import sys
+    import os
+    
+    # Parse command line arguments for user authority
+    user_authority = 0.8  # default value
+    participant_id = "001"  # default participant ID
+    trial_num = "01"  # default trial number
+    
+    if args is None:
+        args = sys.argv[1:]
+    
+    # Simple argument parsing
+    for i, arg in enumerate(args):
+        if arg == '--user_authority' and i + 1 < len(args):
+            try:
+                user_authority = float(args[i + 1])
+                user_authority = max(0.0, min(1.0, user_authority))  # clamp to [0, 1]
+            except ValueError:
+                print(f"Warning: Invalid user_authority value '{args[i + 1]}', using default 0.8")
+        elif arg == '--participant' and i + 1 < len(args):
+            participant_id = args[i + 1]
+        elif arg == '--trial' and i + 1 < len(args):
+            trial_num = args[i + 1]
+    
+    # Setup custom log directory
+    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+    log_dir = os.path.join(desktop_path, f"T_{participant_id}", trial_num, f"{user_authority}", "control_fusion_node")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Set ROS log directory
+    os.environ['ROS_LOG_DIR'] = log_dir
+    
     rclpy.init(args=args)
-    node = FusionNode()
+    node = FusionNode(user_authority)
+    print(f"Control Fusion Node started with user_authority={user_authority}, trial={trial_num}, logs saved to: {log_dir}")
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()

@@ -270,8 +270,37 @@ class PathEvalNode(Node):
         self.get_logger().info(f'/path_options: {bci_path} | /multipath: {bci_path} | /path_blocked: {path_blocked} | /danger_stop: {danger}')
         
 def main(args=None):
+    import sys
+    import os
+    
+    # Parse command line arguments
+    participant_id = "001"  # default participant ID
+    authority = "0.8"  # default authority
+    trial_num = "01"  # default trial number
+    
+    if args is None:
+        args = sys.argv[1:]
+    
+    # Simple argument parsing
+    for i, arg in enumerate(args):
+        if arg == '--participant' and i + 1 < len(args):
+            participant_id = args[i + 1]
+        elif arg == '--authority' and i + 1 < len(args):
+            authority = args[i + 1]
+        elif arg == '--trial' and i + 1 < len(args):
+            trial_num = args[i + 1]
+    
+    # Setup custom log directory
+    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+    log_dir = os.path.join(desktop_path, f"T_{participant_id}", trial_num, authority, "path_eval_node")
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Set ROS log directory
+    os.environ['ROS_LOG_DIR'] = log_dir
+    
     rclpy.init(args=args)
     node = PathEvalNode()
+    print(f"Path Eval Node started, trial={trial_num}, logs saved to: {log_dir}")
     rclpy.spin(node)
     node.destroy_node()
     rclpy.shutdown()
