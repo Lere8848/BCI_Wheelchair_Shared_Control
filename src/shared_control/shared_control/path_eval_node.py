@@ -237,17 +237,18 @@ class PathEvalNode(Node):
                 break
 
         # === publish all messages ===
+        # map path information to BCI system format
+        bci_path = [path[0], path[2], path[1]]  # [Left, Right, Forward]
+
+        # publish path options
         path_msg = Int8MultiArray()
-        path_msg.data = path
+        path_msg.data = bci_path  # now same format as bci_path
         self.pub.publish(path_msg)
 
-        # publish vector analysis results as multipath detection (now same as path_options)
+        # publish to Motion Imagery side with LSL outlet
         multipath_msg = Int8MultiArray()
-        multipath_msg.data = path  # now consistent with path_options
+        multipath_msg.data = path # still the old format
         self.multipath_pub.publish(multipath_msg)
-
-        # map and send path information to BCI system format
-        bci_path = [path[0], path[2], path[1]]  # [Left, Right, Forward]
         if self.lsl_outlet and LSL_AVAILABLE:
             try:
                 path_info = [float(bci_path[0]), float(bci_path[1]), float(bci_path[2])]

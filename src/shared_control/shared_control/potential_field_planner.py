@@ -16,6 +16,7 @@ class PotentialFieldPlanner(Node):
  
         self.user_dir_sub = self.create_subscription(Int8, '/user_cmd', self.user_dir_callback, 10) # user intent (0=left, 1=right, 2=forward)
 
+        # Status from path evaluation node
         self.path_blocked_sub = self.create_subscription(Bool, '/path_blocked', self.path_blocked_callback, 10)
         self.multipath_sub = self.create_subscription(Int8MultiArray, '/multipath_detected', self.multipath_callback, 10)
 
@@ -457,8 +458,8 @@ class PotentialFieldPlanner(Node):
             cmd.linear.x = max(0.0, min(0.5, total_force_x))
             
             # steering velocity: based on Y direction force
-            cmd.angular.z = max(-0.4, min(0.4, total_force_y))
-            
+            cmd.angular.z = max(-0.3, min(0.3, total_force_y))
+
             # adjust velocity based on distance to obstacles
             min_obstacle_dist = float('inf')
             for dist in ranges:
@@ -469,7 +470,7 @@ class PotentialFieldPlanner(Node):
                 # reduce velocity when approaching obstacles
                 speed_factor = min_obstacle_dist / 1.0
                 cmd.linear.x *= speed_factor
-                cmd.angular.z *= 1.1  # enhance steering capability
+                cmd.angular.z *= 0.9  # limit steering capability
             
             # generate intent description
             direction_names = ["Left", "Forward", "Right"]
