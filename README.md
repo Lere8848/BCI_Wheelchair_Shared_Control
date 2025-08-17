@@ -4,7 +4,7 @@ This repository contains a ROS2-based shared control system for BCI (Brain-Compu
 
 ## Related Projects
 
-**This project works with the following ROS2 project**
+**This project works with the following Unity project**
 - [BCI_Wheelchair_Simulator](https://github.com/Lere8848/BCI_Wheelchair_Simulator) - BCI wheelchair simulator in Unity.
 
 Both projects need to run simultaneously, with the Unity simulator serving as the hardware platform and the ROS2 project providing control algorithms.
