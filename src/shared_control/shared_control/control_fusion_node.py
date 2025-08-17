@@ -46,9 +46,14 @@ class FusionNode(Node):
         self.execution_start_time = None
         self.execution_duration = 3.0  # execution duration per time (seconds)
         
-        # user intentstatus
+        # Shared control authority parameters
+        self.user_authority = 1.0  # User authority weight
+        self.auto_authority = 1.0 - self.user_authority  # Potential Field weight
+        
+        # user intent status
         self.pending_user_direction = None  # pending user direction intent
         self.last_user_command_time = None
+        self.current_user_cmd = Twist()  # Current user direct control command
         
         # Ground Truth status control
         self.waiting_for_groundtruth = False  # whether waiting for true intent input
@@ -191,8 +196,16 @@ class FusionNode(Node):
 
             # keep potential field algorithm output
             if not (self.auto_cmd.linear.x == 0.0 and self.auto_cmd.angular.z == 0.0):
-                self.get_logger().debug(f'Executing potential field command: linear={self.auto_cmd.linear.x:.2f}, angular={self.auto_cmd.angular.z:.2f}')
-                self.cmd_pub.publish(self.auto_cmd)
+                # Fusion: Weighted combination of user direct control and autonomous navigation
+                fused_cmd = Twist()
+                fused_cmd.linear.x = (self.user_authority * self.current_user_cmd.linear.x + 
+                                    self.auto_authority * self.auto_cmd.linear.x)
+                fused_cmd.angular.z = (self.user_authority * self.current_user_cmd.angular.z + 
+                                     self.auto_authority * self.auto_cmd.angular.z)
+                
+                self.get_logger().debug(f'Fused command (user_auth={self.user_authority:.1f}): '
+                                      f'linear={fused_cmd.linear.x:.2f}, angular={fused_cmd.angular.z:.2f}')
+                self.cmd_pub.publish(fused_cmd)
                 self.send_motion_status(True)  # Send moving status
             else:
                 # potential field algorithm output is zero, may have reached target or encountered obstacle, end execution
@@ -204,7 +217,7 @@ class FusionNode(Node):
                 self.send_motion_status(False)  # Send stop status
     
     def user_cmd_callback(self, msg):
-        """user command callback - trigger potential field algorithm to execute user selected direction"""
+        """user command callback - generate direct user control and trigger potential field execution"""
         direction = msg.data  # 0=left, 1=right, 2=forward  Int8 [0/1/2]
 
         if direction < 0 or direction > 2:
@@ -213,6 +226,20 @@ class FusionNode(Node):
 
         direction_names = ["Left", "Right", "Forward"]
         self.get_logger().info(f'User command received: {direction_names[direction]}')
+        
+        # Generate direct user control command
+        user_cmd = Twist()
+        if direction == 0:  # Left
+            user_cmd.linear.x = 0.14
+            user_cmd.angular.z = -0.3
+        elif direction == 1:  # Right  
+            user_cmd.linear.x = 0.14
+            user_cmd.angular.z = 0.3
+        elif direction == 2:  # Forward
+            user_cmd.linear.x = 0.5
+            user_cmd.angular.z = 0.0
+        
+        self.current_user_cmd = user_cmd
         
         # if currently executing, terminate current execution and prepare new execution
         if self.state == "EXECUTING":
